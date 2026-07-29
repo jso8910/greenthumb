@@ -29,6 +29,8 @@
 
      ;; Fields to be set by method 'analyze-opcode'
      [opcode-pool #f]        ;; Opcodes to be considered during synthesis.
+     [isa-restrictions #f]   ;; Optional ISA-specific candidate restrictions.
+     [restriction-reg-map #f]
      )
     
     ;; Required methods to be implemented.
@@ -60,6 +62,9 @@
      analyze-opcode analyze-args 
      get-arg-ranges get-arg-types get-class-opcodes
      has-opcode-id? 
+     load-restrictions! set-restrictions! get-restrictions restrictions-enabled?
+     set-restriction-reg-map! get-restriction-reg-map
+     restriction-word-allowed? inst-allowed? program-allowed?
 
      ;; For enumerative search
      get-inst-key
@@ -144,6 +149,20 @@
     (define (analyze-opcode prefix code postfix) (void))
 
     (define (reset-opcode-pool) (void))
+
+    ;; Optional ISA-specific restriction hooks. The base implementation is
+    ;; permissive so existing ISAs keep their current behavior.
+    (define (load-restrictions! file)
+      (raise (format "machine:load-restrictions!: restrictions are not supported for this ISA: ~a" file)))
+    (define (set-restrictions! restrictions) (set! isa-restrictions restrictions))
+    (define (get-restrictions) isa-restrictions)
+    (define (restrictions-enabled?) (and isa-restrictions #t))
+    (define (set-restriction-reg-map! reg-map) (set! restriction-reg-map reg-map))
+    (define (get-restriction-reg-map) restriction-reg-map)
+    (define (restriction-word-allowed? word) #t)
+    (define (inst-allowed? my-inst) #t)
+    (define (program-allowed? code)
+      (for/and ([my-inst code]) (inst-allowed? my-inst)))
 
     (define (get-state init #:concrete [concrete #t])
       (define (recursive-init structure init-min init-max init-const)

@@ -62,6 +62,31 @@ racket optimize.rkt --hybrid -p -c 8 -t 3600 programs/p14_floor_avg_o0.s
 
 Run `racket optimize.rkt --help` to see all supported arguments and what their default values are.
 
+The ARM optimizer uses Kodkod by default for Rosette validation and symbolic search. Use `--solver z3` to select Z3 instead. This uses Rosette's Z3 backend, so the Z3 executable must be compatible with the installed Rosette version.
+
+```
+racket optimize.rkt --stoch -s --solver z3 -c 1 -t 60 programs/p14_floor_avg_o0.s
+```
+
+### ARM ISA Restrictions
+
+The ARM optimizer accepts an optional `--restrict <file>` argument. The file is a Racket data file, not evaluated code, containing 32-bit `0`/`1`/`x` patterns over greenthumb's canonical ARM32 encoding for each synthesized candidate instruction:
+
+```
+((default allow)
+ (deny "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx1x"))
+```
+
+Use `(default allow)` with `deny` patterns or `(default deny)` with `allow` patterns. The original input program may use restricted encodings; restrictions apply to synthesized replacement candidates. Greenthumb still prints normal assembly, and the restriction guarantee is against greenthumb's canonical encoding model rather than a later assembler's encoding choices.
+
+The ARM32 backend's modeled non-control subset includes full condition suffixes, ADC/SBC/RSC data processing, flag-setting data-processing forms, TST/TEQ/CMP/CMN immediate and shifted-register forms, byte/halfword/signed loads, byte/halfword stores, SWP/SWPB, multiply and long-multiply flag variants, SMLAL/UMLAL, and a constrained block-transfer form written as `ldm rn, #regmask` or `stm rn, #regmask`. Control flow is still outside the synthesized subset. The block-transfer form is increment-after without writeback, load-PSR, or PC behavior, and byte/halfword memory operations use greenthumb's simplified abstract memory model.
+
+To spot-check canonical encodings against a real assembler, run:
+
+```
+racket tests/test-random-encodings.rkt --count 500 --seed 1
+```
+
 ### Outputs
 An output directory containing `driver-<id>.rkt` files will be created. The default name of the output directory is `output`. Use `-d` flag to specify the output directory's name. Each `driver-<id>.rkt` file runs a search instance. 
 
@@ -140,7 +165,7 @@ raco make <list_of_flies_to_be_compiled>
 
 For example, in `ARM` directory, run:
 ```
-raco make test-search.rkt ../parallel-driver.rkt
+raco make tests/test-search.rkt ../parallel-driver.rkt
 ```
 
 ## More Documentation

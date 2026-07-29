@@ -12,6 +12,8 @@
 (define time-limit (make-parameter 3600))
 (define input-file (make-parameter #f))
 (define window (make-parameter #f))
+(define restriction-file (make-parameter #f))
+(define solver-name (make-parameter 'kodkod))
  
 (define file-to-optimize
   (command-line
@@ -31,6 +33,12 @@
    [("-i" "--input")    i
                         "Path to inputs. (default=#f)."
                         (input-file i)]
+   [("-r" "--restrict") r
+                        "Path to ARM32 ISA restriction file. (default=#f)."
+                        (restriction-file r)]
+   [("--solver") s
+                        "Solver backend: kodkod or z3. (default=kodkod)."
+                        (solver-name (string->symbol s))]
    [("-w" "--window")    w
                         "Window size."
                         (window (string->number w))]
@@ -72,4 +80,6 @@
           #:dir (dir) #:cores (cores) 
           #:time-limit (time-limit) #:size (size) #:window (window)
           #:input-file (input-file)
+          #:restriction-file (restriction-file)
+          #:solver-name (solver-name)
 	  )

@@ -85,6 +85,7 @@
 
 	(arg-pair
 	      ((WORD arg) (list $1 $2))
+	      ((LSQBR REG RSQBR) (list $2))
 	      ((LSQBR REG COMMA arg RSQBR) (list $2 $4)))
 
         (args ((arg) (list $1))
@@ -135,10 +136,15 @@
 	(define op-len (string-length op))
 	;; Determine type
 	(define cond-type (substring op (- op-len 2)))
+        (define cond-looking-op?
+          (member op (list "smmls" "adcs" "sbcs" "rscs" "bics" "movs"
+                           "muls" "mlas" "smulls" "umulls" "smlal"
+                           "umlal" "smlals" "umlals")))
 	(define cond?
-          (and (member cond-type (list "eq" "ne" "ls" "hi" "cc" "cs" "lt" "ge")) 
+          (and (member cond-type (list "eq" "ne" "cs" "cc" "mi" "pl" "vs" "vc"
+                                        "hi" "ls" "ge" "lt" "gt" "le" "al"))
                (> op-len 3)
-               (not (equal? op "smmls"))))
+               (not cond-looking-op?)))
 	;; ls
 	(set! cond-type (if cond? cond-type ""))
 	(when cond? (set! op (substring op 0 (- op-len 2))))

@@ -16,7 +16,9 @@
   (class object%
     (super-new)
     (init-field isa parser machine printer validator search-type mode
-                [window #f])
+                [window #f]
+                [restriction-file #f]
+                [solver-name 'kodkod])
     ;; search = `solver, `stoch, `hybrid
     ;; mode = `linear, `binary, `syn, `opt
     (public optimize)
@@ -40,6 +42,8 @@
       ;; Use the fewest number of registers possible.
       (define-values (code live-out map-back machine-config) 
         (send printer compress-state-space code-org live-out-org))
+      (when restriction-file
+            (send machine set-restriction-reg-map! map-back))
       (pretty-display (format ">>> machine-config: ~a" machine-config))
       (pretty-display (format ">>> live-out: ~a" live-out))
       (pretty-display `(map-back ,map-back))
@@ -80,11 +84,16 @@
                (pretty-display (format "(define machine (new ~a [config ~a]))"
                                        (get-class-name "machine")
                                        (send printer set-config-string machine-config)))
+               (when restriction-file
+                     (pretty-display
+                      (format "(send machine set-restriction-reg-map! '~s)" map-back))
+                     (pretty-display
+                      (format "(send machine load-restrictions! ~s)" restriction-file)))
                (pretty-display (format "(define printer (new ~a [machine machine]))" (get-class-name "printer")))
                (pretty-display (format "(define parser (new ~a))" (get-class-name "parser")))
                (pretty-display (format "(define simulator-racket (new ~a [machine machine]))" (get-class-name "simulator-racket")))
                (pretty-display (format "(define simulator-rosette (new ~a [machine machine]))" (get-class-name "simulator-rosette")))
-               (pretty-display (format "(define validator (new ~a [machine machine] [simulator simulator-rosette]))" (get-class-name "validator")))
+               (pretty-display (format "(define validator (new ~a [machine machine] [simulator simulator-rosette] [solver-name '~a]))" (get-class-name "validator") solver-name))
 
                (cond
                 [(equal? search-type `stoch)
@@ -94,9 +103,10 @@
                           (equal? mode `syn)))]
                 [(equal? search-type `solver)
                  (pretty-display 
-                  (format "(define search (new ~a [machine machine] [printer printer] [parser parser] [validator validator] [simulator simulator-rosette] [syn-mode `~a]))" 
+                  (format "(define search (new ~a [machine machine] [printer printer] [parser parser] [validator validator] [simulator simulator-rosette] [syn-mode `~a] [solver-name '~a]))"
                           (get-class-name "symbolic") 
-                          mode))]
+                          mode
+                          solver-name))]
                 [(equal? search-type `enum)
                  (pretty-display 
                   (format "(define search (new ~a [machine machine] [printer printer] [parser parser] [validator validator] [simulator simulator-racket] [enumerator% ~a] [inverse% ~a] [syn-mode `~a]))" 
@@ -310,7 +320,14 @@
         (get-stats)
 	(if (file-exists? (format "~a/best.s" dir))
 	    (send parser ir-from-file (format "~a/best.s" dir))
-	    (vector-copy code from to)))
+	    (let ([fallback (vector-copy code from to)])
+              (when (and restriction-file
+                         (not (send machine program-allowed?
+                                    (send printer encode fallback))))
+                    (raise-user-error 'parallel-driver
+                                      "no candidate satisfying ARM32 ISA restrictions was found for window ~a..~a"
+                                      from to))
+              fallback)))
 
       (define code-len (vector-length code))
       (define window-size (if window window (send machine window-size)))

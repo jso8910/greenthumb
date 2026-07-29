@@ -1,11 +1,11 @@
 #lang s-exp rosette
 
-(require "arm-validator.rkt" "arm-machine.rkt" "arm-printer.rkt"
-         "arm-parser.rkt" "../inst.rkt"
-         "arm-simulator-rosette.rkt" 
-         "arm-simulator-racket.rkt"
-         "arm-symbolic.rkt" "arm-stochastic.rkt" 
-         "arm-forwardbackward.rkt" "arm-enumerator.rkt" "arm-inverse.rkt"
+(require "../arm-validator.rkt" "../arm-machine.rkt" "../arm-printer.rkt"
+         "../arm-parser.rkt" "../../inst.rkt"
+         "../arm-simulator-rosette.rkt" 
+         "../arm-simulator-racket.rkt"
+         "../arm-symbolic.rkt" "../arm-stochastic.rkt" 
+         "../arm-forwardbackward.rkt" "../arm-enumerator.rkt" "../arm-inverse.rkt"
          )
 
 (define parser (new arm-parser%))

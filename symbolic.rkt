@@ -1,8 +1,7 @@
 #lang s-exp rosette
 
-(require "inst.rkt" "machine.rkt" "decomposer.rkt" "validator.rkt")
-(require rosette/solver/kodkod/kodkod)
-(require rosette/solver/smt/z3)
+(require "inst.rkt" "machine.rkt" "decomposer.rkt" "validator.rkt"
+         "solver-config.rkt")
 
 (provide symbolic%)
 
@@ -13,7 +12,8 @@
                    simulator validator
                    stat)
     (init-field [pure-symbolic #t]
-                [bit (get-field bitwidth machine)])
+                [bit (get-field bitwidth machine)]
+                [solver-name 'kodkod])
     (override synthesize-window)
     (public synthesize-from-sketch evaluate-inst gen-sym-inst sym-op sym-arg)
 
@@ -67,6 +67,7 @@
            (vector-append prefix spec postfix) 
 	   (vector-append prefix sketch postfix)
 	   constraint cost time-limit
+            #:restricted-sketch sketch
             #:hard-prefix hard-prefix #:hard-postfix hard-postfix 
             #:assume assumption)
           (synthesize-window-mix 
@@ -94,10 +95,11 @@
                       (regexp-match #rx"assert: cost" (exn-message e)))
                   (loop)
                   (raise e)))])
-         (synthesize-from-sketch 
+         (synthesize-from-sketch
           (vector-append prefix spec postfix)
 	  (vector-append prefix sketch postfix)
 	  constraint cost time-limit
+          #:restricted-sketch sketch
           #:hard-prefix hard-prefix #:hard-postfix hard-postfix 
           #:assume assumption)
          ))
@@ -113,11 +115,12 @@
     (define (synthesize-from-sketch spec sketch constraint  
 				    [cost #f]
 				    [time-limit 3600]
+                                    #:restricted-sketch [restricted-sketch #f]
                                     #:hard-prefix [hard-prefix (vector)] 
                                     #:hard-postfix [hard-postfix (vector)]
 				    #:assume [assumption (send machine no-assumption)])
       (send (current-solver) shutdown)
-      (current-solver (new kodkod%))
+      (set-current-solver! solver-name)
       (pretty-display "SUPERPOTIMIZE:")
       (pretty-display (format "solver = ~a" (current-solver)))
       (when debug
@@ -138,6 +141,7 @@
       (define sketch-state #f)
       (define spec-cost #f)
       (define sketch-cost #f)
+      (define sketch-to-restrict (or restricted-sketch sketch))
       
       (define (interpret-spec!)
         (when debug
@@ -153,6 +157,9 @@
         (when debug
               (newline)
               (pretty-display "=========== interpret sketch"))
+        (when (send machine restrictions-enabled?)
+              (assert (send machine program-allowed? sketch-to-restrict)
+                      "isa restriction"))
         (set! sketch-state 
               (send simulator interpret (vector-append hard-prefix sketch hard-postfix)
                     start-state spec-state))

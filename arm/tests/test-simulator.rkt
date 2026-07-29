@@ -1,12 +1,12 @@
 #lang s-exp rosette
 
-(require "arm-machine.rkt"
-         "arm-printer.rkt" "arm-parser.rkt"
-         "arm-simulator-rosette.rkt" 
-         "arm-simulator-racket.rkt"
-         "arm-validator.rkt"
-         "arm-symbolic.rkt"
-         "../memory-rosette.rkt"
+(require "../arm-machine.rkt"
+         "../arm-printer.rkt" "../arm-parser.rkt"
+         "../arm-simulator-rosette.rkt" 
+         "../arm-simulator-racket.rkt"
+         "../arm-validator.rkt"
+         "../arm-symbolic.rkt"
+         "../../memory-rosette.rkt"
          )
 
 (current-bitwidth 32)

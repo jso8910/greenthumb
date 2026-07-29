@@ -7,17 +7,102 @@
 (provide arm-stochastic%)
 
 (define arm-stochastic%
-  (class stochastic%
-    (super-new)
-    (inherit-field machine stat mutate-dist live-in)
-    (inherit random-args-from-op mutate pop-count32 correctness-cost-base inst-copy-with-op)
-    (override correctness-cost 
-              )
+	  (class stochastic%
+	    (super-new)
+	    (inherit-field machine stat mutate-dist live-in)
+	    (inherit mutate pop-count32 correctness-cost-base
+	             inst-copy-with-op inst-copy-with-args)
+	    (override correctness-cost 
+	              random-args-from-op mutate-operand
+	              )
     (set! mutate-dist
           #hash((opcode . 2) (operand . 1) (swap . 1) (instruction . 1)))
 	  
 
-    (define bit (get-field bitwidth machine))
+	    (define bit (get-field bitwidth machine))
+
+	    (define (u32-random)
+	      (bitwise-ior (arithmetic-shift (random 65536) 16)
+	                   (random 65536)))
+
+	    (define (finitize-local value)
+	      (define mask (sub1 (arithmetic-shift 1 bit)))
+	      (define masked (bitwise-and value mask))
+	      (if (bitwise-bit-set? masked (sub1 bit))
+	          (bitwise-ior masked (arithmetic-shift -1 bit))
+	          masked))
+
+	    (define (dedupe xs)
+	      (reverse (remove-duplicates xs)))
+
+	    (define (const-candidates seed-values)
+	      (define seeds (filter number? seed-values))
+	      (dedupe
+	       (append
+	        seeds
+	        (range 256)
+	        '(-1 -2 -4 -8 -16)
+	        (for/list ([v seeds]) (quotient v 2))
+	        (for/list ([v seeds]) (- v))
+	        (for/list ([v seeds]) (add1 v))
+	        (for/list ([v seeds]) (sub1 v))
+	        (for/list ([v seeds]) (arithmetic-shift v -1)))))
+
+	    (define (source-derived-consts seed-values)
+	      (define seeds (filter number? seed-values))
+	      (dedupe
+	       (append
+	        seeds
+	        (for/list ([v seeds]) (quotient v 2))
+	        (for/list ([v seeds]) (- v))
+	        (for/list ([v seeds]) (add1 v))
+	        (for/list ([v seeds]) (sub1 v))
+	        (for/list ([v seeds]) (arithmetic-shift v -1))
+	        (for/list ([v seeds]) (arithmetic-shift v 1)))))
+
+	    (define (random-const seed-values [old #f])
+	      (define derived (source-derived-consts seed-values))
+	      (define pool (const-candidates seed-values))
+	      (define sample
+	        (cond
+	          [(and (not (empty? derived)) (< (random) 0.55))
+	           (random-from-list derived)]
+	          [(< (random) 0.90) (random-from-list pool)]
+	          [else (finitize-local (u32-random))]))
+	      (if (and old (= sample old) (> (length pool) 1))
+	          (random-const seed-values old)
+	          sample))
+
+	    (define (random-bit-amount seed-values [old #f])
+	      (define pool
+	        (dedupe
+	         (append (filter number? seed-values)
+	                 (range (add1 bit)))))
+	      (define sample (random-from-list pool))
+	      (if (and old (= sample old) (> (length pool) 1))
+	          (random-bit-amount seed-values old)
+	          sample))
+
+	    (define (random-value-for-type type range [old #f])
+	      (define seeds (if (vector? range) (vector->list range) '()))
+	      (cond
+	        [(equal? type 'const) (random-const seeds old)]
+	        [(equal? type 'bit) (random-bit-amount seeds old)]
+	        [(and old (vector? range)) (random-from-vec-ex range old)]
+	        [(vector? range) (random-from-vec range)]
+	        [else #f]))
+
+	    ;; Create random operands from opcode.  ARM immediates are semantic
+	    ;; values here; ISA pattern restrictions remain the final instruction
+	    ;; word filter in random-instruction.
+	    (define (random-args-from-op opcode-id live-in)
+	      (define ranges (send machine get-arg-ranges opcode-id #f live-in))
+	      (define types (send machine get-arg-types opcode-id))
+	      (when debug (pretty-display (format " --> ranges ~a" ranges)))
+	      (define pass (and ranges (for/and ([range ranges]) (> (vector-length range) 0))))
+	      (and pass
+	           (for/vector ([range ranges] [type types])
+	                       (random-value-for-type type range))))
 
 
     ;; Mutate opcode.
@@ -50,10 +135,51 @@
         (send stat inc-propose `opcode)
         new-p]
 
-       [else (mutate p)]))
+	       [else (mutate p)]))
+
+	    ;; Mutate operand.  This mirrors the generic stochastic mutator, but
+	    ;; lets ARM immediates draw from their broader semantic domains instead
+	    ;; of only from the current finite argument-range vector.
+	    (define (mutate-operand index entry p)
+	      (define opcode-id (inst-op entry))
+	      (define opcode-name (send machine get-opcode-name opcode-id))
+	      (define args (vector-copy (inst-args entry)))
+	      (define my-live-in live-in)
+	      (for ([i index])
+	           (set! my-live-in (send machine update-live my-live-in (vector-ref p i))))
+	      (define ranges (send machine get-arg-ranges opcode-id entry my-live-in))
+	      (define types (send machine get-arg-types opcode-id))
+	      (cond
+	       [(and ranges (> (vector-length ranges) 0))
+	        (define okay-indexes (list))
+	        (for ([range ranges]
+	              [type types]
+	              [i (vector-length ranges)])
+	             (when (or (equal? type 'const)
+	                       (equal? type 'bit)
+	                       (> (vector-length range) 1))
+	                   (set! okay-indexes (cons i okay-indexes))))
+	        (cond
+	         [(empty? okay-indexes) (mutate p)]
+	         [else
+	          (define change (random-from-list okay-indexes))
+	          (define valid-vals (vector-ref ranges change))
+	          (define type (vector-ref types change))
+	          (define new-val
+	            (random-value-for-type type valid-vals (vector-ref args change)))
+	          (define new-p (vector-copy p))
+	          (when debug
+	                (pretty-display (format " --> org = ~a ~a" opcode-name args))
+	                (pretty-display (format " --> choices = ~a" valid-vals))
+	                (pretty-display (format " --> new = [~a]->~a" change new-val)))
+	          (vector-set! args change new-val)
+	          (vector-set! new-p index (inst-copy-with-args entry args))
+	          (send stat inc-propose `operand)
+	          new-p])]
+	       [else (mutate p)]))
 
 
-    (define (diff-cost x y)
+	    (define (diff-cost x y)
       (pop-count32 (bitwise-xor (bitwise-and x #xffffffff) 
                                 (bitwise-and y #xffffffff))))
     

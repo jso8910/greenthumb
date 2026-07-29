@@ -1,6 +1,7 @@
 #lang racket
 
 (require "../parallel-driver.rkt" "../inst.rkt"
+         "../solver-config.rkt"
          "arm-parser.rkt" "arm-machine.rkt" 
          "arm-printer.rkt"
 	 ;; simulator, validator
@@ -21,16 +22,27 @@
                   #:time-limit [time-limit 3600]
                   #:size [size #f]
                   #:window [window #f]
-                  #:input-file [input-file #f])
+                  #:input-file [input-file #f]
+                  #:restriction-file [restriction-file #f]
+                  #:solver-name [solver-name 'kodkod])
+  (define normalized-solver-name (normalize-solver-name solver-name))
+  (define normalized-restriction-file
+    (and restriction-file
+         (path->string (simplify-path (path->complete-path restriction-file)))))
   (define parser (new arm-parser%))
   (define machine (new arm-machine%))
+  (when normalized-restriction-file
+        (send machine load-restrictions! normalized-restriction-file))
   (define printer (new arm-printer% [machine machine]))
   (define simulator (new arm-simulator-rosette% [machine machine]))
-  (define validator (new arm-validator% [machine machine] [simulator simulator]))
+  (define validator (new arm-validator% [machine machine] [simulator simulator]
+                         [solver-name normalized-solver-name]))
   (define parallel (new parallel-driver% [isa "arm"] [parser parser] [machine machine] 
                         [printer printer] [validator validator]
                         [search-type search-type] [mode mode]
-                        [window window]))
+                        [window window]
+                        [restriction-file normalized-restriction-file]
+                        [solver-name normalized-solver-name]))
 
   (send parallel optimize code live-out 
         #:dir dir #:cores cores 

@@ -1,10 +1,8 @@
 #lang s-exp rosette
 
 (require  "inst.rkt" "machine.rkt" "memory-rosette.rkt" "queue-rosette.rkt" "special.rkt"
-          "ops-rosette.rkt")
-
-(require rosette/solver/smt/z3)
-(require rosette/solver/kodkod/kodkod)
+          "ops-rosette.rkt"
+          "solver-config.rkt")
 
 (provide validator% sym-input get-rand-func)
 
@@ -40,7 +38,8 @@
     (super-new)
     (init-field machine simulator [printer #f]
                 [bit (get-field bitwidth machine)]
-                [random-input-bit (get-field random-input-bits machine)])
+                [random-input-bit (get-field random-input-bits machine)]
+                [solver-name 'kodkod])
     (public generate-input-states
             counterexample
             get-live-in
@@ -55,7 +54,7 @@
     (define ninsts (vector-length (get-field opcodes machine)))
     (define start-time #f)
 
-    (current-solver (new kodkod%))
+    (set-current-solver! solver-name)
 
     ;; Default: no assumption
     (define (assume state assumption)

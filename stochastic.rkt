@@ -119,8 +119,12 @@
             (for ([i outputs])
                  (send machine display-state i))
             )
-      (set-field! best-correct-program stat spec)
-      (set-field! best-correct-cost stat (send simulator performance-cost spec))
+      (define spec-allowed? (send machine program-allowed? spec))
+      (set-field! best-correct-program stat (and spec-allowed? spec))
+      (set-field! best-correct-cost stat
+                  (if spec-allowed?
+                      (send simulator performance-cost spec)
+                      w-error))
       (send stat set-name name)
       (pretty-display (format ">>> Finish generating inputs outputs at ~a s."
                               (- (current-seconds) (get-field start-time stat))))
@@ -291,14 +295,20 @@
     ;; live-in: vector/list/pair format
     (define (random-instruction
              index n live-in
-             [opcode-id (random-from-list (send machine get-valid-opcode-pool index n live-in))])
+             [opcode-id #f]
+             [tries 0])
+      (when (> tries 1000)
+        (raise "random-instruction: cannot find an instruction allowed by the current ISA restrictions"))
+      (unless opcode-id
+        (set! opcode-id (random-from-list (send machine get-valid-opcode-pool index n live-in))))
       (when #f
             (pretty-display `(pool ,(send machine get-valid-opcode-pool index n live-in))))
       (when debug (pretty-display `(random-instruction ,opcode-id)))
       (define args (random-args-from-op opcode-id live-in))
-      (if args
-          (inst opcode-id args)
-          (random-instruction index n live-in)))
+      (define candidate (and args (inst opcode-id args)))
+      (if (and candidate (send machine inst-allowed? candidate))
+          candidate
+          (random-instruction index n live-in #f (add1 tries))))
     
     ;; Create random operands from opcode.
     (define (random-args-from-op opcode-id live-in)

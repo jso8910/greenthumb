@@ -1,8 +1,8 @@
 #lang s-exp rosette
 
-(require "arm-validator.rkt" "arm-machine.rkt" "arm-printer.rkt"
-         "arm-simulator-rosette.rkt" 
-         "arm-parser.rkt")
+(require "../arm-validator.rkt" "../arm-machine.rkt" "../arm-printer.rkt"
+         "../arm-simulator-rosette.rkt" 
+         "../arm-parser.rkt")
 
 ;;(require rosette/solver/smt/z3)
 

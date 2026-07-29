@@ -55,6 +55,7 @@
 
     ;; Actual bitwidth
     (define bit-precise (get-field bitwidth machine))
+    (define machine-precise machine)
     
     ;; Reduce bitwidth
     (define bit 4)
@@ -477,7 +478,9 @@
       (define sketch (make-vector (vector-length spec)))
 
       (synthesize-window spec sketch prefix postfix constraint 
-                         (send simulator performance-cost spec) time-limit
+                         (and (send machine-precise program-allowed? spec)
+                              (send simulator performance-cost spec))
+                         time-limit
                          #:assume assumption))
 
     (define (synthesize-window spec sketch prefix postfix constraint  
@@ -682,17 +685,19 @@
         (define t1 (current-milliseconds))
         (define
           pass
-          (for/and ([input ce-in-final]
-                    [output ce-out-final]
-                    [output-vec ce-out-vec-final])
-                   (let* ([my-output 
-			   (with-handlers*
-			    ([exn? (lambda (e) #f)])
-			    (send simulator interpret (vector-append p postfix-precise)
-                                  input output))]
-			  [my-output-vec
-			   (and my-output (send machine progstate->vector my-output))])
-                     (and my-output (send machine state-eq? output-vec my-output-vec live3-vec)))))
+          (and
+           (send machine-precise program-allowed? p)
+           (for/and ([input ce-in-final]
+                     [output ce-out-final]
+                     [output-vec ce-out-vec-final])
+                    (let* ([my-output
+                            (with-handlers*
+                             ([exn? (lambda (e) #f)])
+                             (send simulator interpret (vector-append p postfix-precise)
+                                   input output))]
+                           [my-output-vec
+                            (and my-output (send machine progstate->vector my-output))])
+                      (and my-output (send machine state-eq? output-vec my-output-vec live3-vec))))))
         (define t2 (current-milliseconds))
         (set! t-ce-abst (+ t-ce-abst (- t2 t1)))
         (set! c-ce-abst (add1 c-ce-abst))
