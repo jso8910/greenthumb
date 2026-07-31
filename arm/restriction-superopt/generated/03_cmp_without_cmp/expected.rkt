@@ -1,0 +1,8 @@
+((name "03_cmp_without_cmp")
+ (hard #f)
+ (timeout 60)
+ (size 1)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "subs tmp, r1, r2")
+ (forbidden-opcodes ("cmp")))

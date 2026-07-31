@@ -1,0 +1,8 @@
+((name "20_str_imm_without_imm_offset")
+ (hard #f)
+ (timeout 90)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "mov tmp, #4; str r0, [r1, tmp]")
+ (forbidden-opcodes ()))

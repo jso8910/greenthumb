@@ -1,0 +1,8 @@
+((name "05_tst_without_tst")
+ (hard #f)
+ (timeout 60)
+ (size 1)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "ands tmp, r1, r2")
+ (forbidden-opcodes ("tst")))

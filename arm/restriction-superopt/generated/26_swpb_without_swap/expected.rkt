@@ -1,0 +1,8 @@
+((name "26_swpb_without_swap")
+ (hard #f)
+ (timeout 120)
+ (size 3)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "ldrb tmp, [r1]; strb r2, [r1]; mov r0, tmp")
+ (forbidden-opcodes ("swp" "swpb")))

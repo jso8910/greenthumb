@@ -1,0 +1,8 @@
+((name "23_word_load_from_bytes")
+ (hard #t)
+ (timeout 300)
+ (size 8)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "four ldrb operations plus shifts and orr to rebuild r0")
+ (forbidden-opcodes ("ldr")))

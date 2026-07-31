@@ -1,0 +1,8 @@
+((name "24_word_store_from_bytes")
+ (hard #t)
+ (timeout 300)
+ (size 8)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "four strb operations with shifts to write each byte")
+ (forbidden-opcodes ("str")))

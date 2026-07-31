@@ -1,0 +1,8 @@
+((name "11_add_imm4_without_exact_imm4")
+ (hard #f)
+ (timeout 90)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "split immediate sequence such as #1 plus #3")
+ (forbidden-opcodes ()))

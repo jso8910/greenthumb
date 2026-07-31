@@ -1,0 +1,8 @@
+((name "12_mov_imm255_without_exact_imm255")
+ (hard #f)
+ (timeout 90)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "nearby constant construction such as #256 minus #1")
+ (forbidden-opcodes ()))

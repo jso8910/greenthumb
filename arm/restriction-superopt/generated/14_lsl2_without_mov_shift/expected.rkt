@@ -1,0 +1,8 @@
+((name "14_lsl2_without_mov_shift")
+ (hard #f)
+ (timeout 90)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "add tmp, r1, r1; add r0, tmp, tmp")
+ (forbidden-opcodes ("lsl")))

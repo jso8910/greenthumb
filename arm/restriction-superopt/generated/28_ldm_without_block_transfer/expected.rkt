@@ -1,0 +1,8 @@
+((name "28_ldm_without_block_transfer")
+ (hard #t)
+ (timeout 180)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "ldr r0, [r1,#0]; ldr r2, [r1,#4]")
+ (forbidden-opcodes ("stm" "ldm")))

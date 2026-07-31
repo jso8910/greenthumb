@@ -1,0 +1,8 @@
+((name "27_stm_without_block_transfer")
+ (hard #t)
+ (timeout 180)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "str r0, [r1,#0]; str r2, [r1,#4]")
+ (forbidden-opcodes ("stm" "ldm")))

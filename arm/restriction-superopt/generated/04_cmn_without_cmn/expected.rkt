@@ -1,0 +1,8 @@
+((name "04_cmn_without_cmn")
+ (hard #f)
+ (timeout 60)
+ (size 1)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "adds tmp, r1, r2")
+ (forbidden-opcodes ("cmn")))

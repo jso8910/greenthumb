@@ -1,0 +1,8 @@
+((name "06_teq_without_teq")
+ (hard #f)
+ (timeout 60)
+ (size 1)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "eors tmp, r1, r2")
+ (forbidden-opcodes ("teq")))

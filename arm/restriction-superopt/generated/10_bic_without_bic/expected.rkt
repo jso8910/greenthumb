@@ -1,0 +1,8 @@
+((name "10_bic_without_bic")
+ (hard #f)
+ (timeout 60)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "mvn tmp, r2; and r0, r1, tmp")
+ (forbidden-opcodes ("bic")))

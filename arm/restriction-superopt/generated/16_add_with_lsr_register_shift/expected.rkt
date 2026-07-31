@@ -1,0 +1,8 @@
+((name "16_add_with_lsr_register_shift")
+ (hard #f)
+ (timeout 60)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "register-shifted-register operand2 form or shifted temporary")
+ (forbidden-opcodes ()))

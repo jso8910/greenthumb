@@ -1,0 +1,8 @@
+((name "17_addeq_without_al_condition")
+ (hard #f)
+ (timeout 60)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "addeq r0, r1, r2 or predicated equivalent")
+ (forbidden-opcodes ("b" "bl" "bx")))

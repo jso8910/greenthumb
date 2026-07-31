@@ -1,0 +1,8 @@
+((name "02_rsb_without_subtract_family")
+ (hard #f)
+ (timeout 90)
+ (size 3)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "mvn tmp, r1; add r0, r2, tmp; add r0, r0, #1")
+ (forbidden-opcodes ("sub" "rsb" "sbc" "rsc" "cmp")))

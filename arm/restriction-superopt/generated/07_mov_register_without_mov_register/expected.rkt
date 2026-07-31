@@ -1,0 +1,8 @@
+((name "07_mov_register_without_mov_register")
+ (hard #f)
+ (timeout 60)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "orr r0, r1, r1 or add r0, r1, #0")
+ (forbidden-opcodes ("mov")))

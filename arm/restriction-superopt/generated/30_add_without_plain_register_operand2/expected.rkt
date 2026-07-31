@@ -1,0 +1,8 @@
+((name "30_add_without_plain_register_operand2")
+ (hard #t)
+ (timeout 180)
+ (size 3)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "shifted-register or materialized-register workaround if one exists")
+ (forbidden-opcodes ()))

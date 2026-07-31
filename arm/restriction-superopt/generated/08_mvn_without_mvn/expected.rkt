@@ -1,0 +1,8 @@
+((name "08_mvn_without_mvn")
+ (hard #f)
+ (timeout 60)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "eor r0, r1, #-1 or equivalent")
+ (forbidden-opcodes ("mvn")))

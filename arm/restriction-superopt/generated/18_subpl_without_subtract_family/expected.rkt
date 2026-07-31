@@ -1,0 +1,8 @@
+((name "18_subpl_without_subtract_family")
+ (hard #f)
+ (timeout 90)
+ (size 3)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "mvnpl tmp, r2; addpl r0, r1, tmp; addpl r0, r0, #1")
+ (forbidden-opcodes ("sub" "rsb" "sbc" "rsc" "cmp")))

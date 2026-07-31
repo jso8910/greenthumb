@@ -1,0 +1,8 @@
+((name "09_orr_without_orr")
+ (hard #f)
+ (timeout 90)
+ (size 3)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "De Morgan sequence using mvn and bic")
+ (forbidden-opcodes ("orr")))

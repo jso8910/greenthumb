@@ -1,0 +1,8 @@
+((name "15_add_with_lsl2_operand2_field")
+ (hard #f)
+ (timeout 60)
+ (size 2)
+ (workers 4)
+ (stack-scratch #f)
+ (expected-shape "same immediate-shifted operand2 form or equivalent")
+ (forbidden-opcodes ()))
