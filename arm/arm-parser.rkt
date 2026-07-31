@@ -115,6 +115,55 @@
        [else
 	(raise (format "Undefine special instruction: ~a ~a" op1 op2))]))
 
+    (define branch-condition-suffixes
+      '("eq" "ne" "cs" "cc" "mi" "pl" "vs" "vc"
+        "hi" "ls" "ge" "lt" "gt" "le" "al"))
+
+    (define (branch-op? op)
+      (or (member op '("b" "bl" "bx"))
+          (for/or ([suffix branch-condition-suffixes])
+                  (and (> (string-length op) (string-length suffix))
+                       (equal? (substring op (- (string-length op)
+                                                (string-length suffix)))
+                               suffix)
+                       (member (substring op 0 (- (string-length op)
+                                                  (string-length suffix)))
+                               '("b" "bl" "bx"))))))
+
+    (define (first-token line)
+      (define match (regexp-match #px"^\\s*([^;\\s]+)" line))
+      (and match (cadr match)))
+
+    (define (reject-branch-lines! source)
+      (for ([line (string-split source "\n" #:trim? #f)]
+            [line-number (in-naturals 1)])
+           (define token (first-token line))
+           (when (and token (branch-op? (string-downcase token)))
+                 (raise-user-error
+                  'arm-parser
+                  "branches are unsupported: GreenThumb ARM optimization expects straight-line input, got ~a on line ~a"
+                  token
+                  line-number))))
+
+    (define/override (ir-from-string s)
+      (reject-branch-lines! s)
+      (let ([input (open-input-string s)])
+        (asm-parser
+         (lambda ()
+           (let ([token (asm-lexer input)])
+             token)))))
+
+    (define/override (ir-from-file file)
+      (and (file-exists? file)
+           (let ([source (file->string file)])
+             (reject-branch-lines! source)
+             (let ([input (open-input-string source)])
+               (port-count-lines! input)
+               (asm-parser
+                (lambda ()
+                  (let ([token (asm-lexer input)])
+                    token)))))))
+
     (define (create-inst op args)
       (define args-len (vector-length args))
       (cond
@@ -133,9 +182,14 @@
 
        [else
 	(when (equal? op "asl") (set! op "lsl"))
+        (when (branch-op? op)
+              (raise-user-error
+               'arm-parser
+               "branches are unsupported: GreenThumb ARM optimization expects straight-line input, got ~a"
+               op))
 	(define op-len (string-length op))
 	;; Determine type
-	(define cond-type (substring op (- op-len 2)))
+	(define cond-type (if (>= op-len 2) (substring op (- op-len 2)) ""))
         (define cond-looking-op?
           (member op (list "smmls" "adcs" "sbcs" "rscs" "bics" "movs"
                            "muls" "mlas" "smulls" "umulls" "smlal"
@@ -187,8 +241,15 @@
       liveness-map)
 
     (define/override (info-from-file file)
+      (define (parse-live-out-token token)
+        (define number (string->number token))
+        (cond
+         [number number]
+         [(member token '("memory" "z" "flag" "flags" "nzcv" "n" "c" "v"))
+          (string->symbol token)]
+         [else token]))
       (define lines (file->lines file))
-      (define live-out (map (lambda (x) (or (string->number x) x))
+      (define live-out (map (lambda (x) (parse-live-out-token (string-trim x)))
                             (string-split (first lines) ",")))
       live-out)
 

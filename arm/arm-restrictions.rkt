@@ -509,12 +509,71 @@
   (sym-member? op-name '(ldr ldr# ldrb ldrb# ldrh ldrh# ldrsb ldrsb# ldrsh ldrsh#)))
 
 (define (word-transfer? op-name)
-  (sym-member? op-name '(ldr ldr# str str# ldrb ldrb# strb strb#)))
+  (sym-member? op-name '(ldr ldr# str str# ldrb ldrb# strb strb#
+                         ldr-full ldr-full# ldrb-full ldrb-full#
+                         str-full str-full# strb-full strb-full#)))
 
-(define (encode-load-store machine cond-code op-name args)
+(define (full-transfer? op-name)
+  (sym-member? op-name '(ldr-full ldr-full# ldrb-full ldrb-full#
+                         ldrh-full ldrh-full# ldrsb-full ldrsb-full#
+                         ldrsh-full ldrsh-full#
+                         str-full str-full# strb-full strb-full#
+                         strh-full strh-full#)))
+
+(define (full-transfer-immediate? op-name)
+  (sym-member? op-name '(ldr-full# ldrb-full# ldrh-full# ldrsb-full# ldrsh-full#
+                         str-full# strb-full# strh-full#)))
+
+(define (full-transfer-load? op-name)
+  (sym-member? op-name '(ldr-full ldr-full# ldrb-full ldrb-full#
+                         ldrh-full ldrh-full# ldrsb-full ldrsb-full#
+                         ldrsh-full ldrsh-full#)))
+
+(define (full-transfer-byte? op-name)
+  (sym-member? op-name '(ldrb-full ldrb-full# strb-full strb-full#)))
+
+(define (full-transfer-halfword? op-name)
+  (sym-member? op-name '(ldrh-full ldrh-full# ldrsb-full ldrsb-full#
+                         ldrsh-full ldrsh-full# strh-full strh-full#)))
+
+(define (encode-load-store machine cond-code op-name shf-id args)
   (define rd (reg4 machine (vector-ref args 0)))
   (define rn (reg4 machine (vector-ref args 1)))
   (cond
+    [(and (full-transfer? op-name)
+          (not (full-transfer-halfword? op-name)))
+     (define p (vector-ref args 3))
+     (define u (vector-ref args 4))
+     (define w (vector-ref args 5))
+     (and (not (and (number? rn) (= rn 15)
+                    (or (equal? p 0) (equal? w 1))))
+          (if (full-transfer-immediate? op-name)
+              (let ([offset (imm12 (vector-ref args 2))])
+                (and offset
+                     (word (bits cond-code 28)
+                           #x04000000
+                           (bits p 24)
+                           (bits u 23)
+                           (if (full-transfer-byte? op-name) #x00400000 0)
+                           (bits w 21)
+                           (if (full-transfer-load? op-name) #x00100000 0)
+                           (bits rn 16)
+                           (bits rd 12)
+                           offset)))
+              (let* ([rm (reg4 machine (vector-ref args 2))]
+                     [shift-operand
+                      (operand2-with-optional-shift machine shf-id args 2 6)])
+                (and rm
+                     (word (bits cond-code 28)
+                           #x06000000
+                           (bits p 24)
+                           (bits u 23)
+                           (if (full-transfer-byte? op-name) #x00400000 0)
+                           (bits w 21)
+                           (if (full-transfer-load? op-name) #x00100000 0)
+                           (bits rn 16)
+                           (bits rd 12)
+                           shift-operand)))))]
     [(sym-member? op-name '(ldr# str# ldrb# strb#))
      (define raw-offset (vector-ref args 2))
      (define byte-offset
@@ -546,9 +605,10 @@
 
 (define (halfword-sh op-name)
   (cond
-    [(sym-member? op-name '(strh strh# ldrh ldrh#)) 1]
-    [(sym-member? op-name '(ldrsb ldrsb#)) 2]
-    [(sym-member? op-name '(ldrsh ldrsh#)) 3]
+    [(sym-member? op-name '(strh strh# ldrh ldrh# strh-full strh-full#
+                            ldrh-full ldrh-full#)) 1]
+    [(sym-member? op-name '(ldrsb ldrsb# ldrsb-full ldrsb-full#)) 2]
+    [(sym-member? op-name '(ldrsh ldrsh# ldrsh-full ldrsh-full#)) 3]
     [else #f]))
 
 (define (encode-halfword-transfer machine cond-code op-name args)
@@ -556,6 +616,43 @@
   (define rn (reg4 machine (vector-ref args 1)))
   (define sh (halfword-sh op-name))
   (cond
+    [(and (full-transfer? op-name)
+          (full-transfer-halfword? op-name))
+     (define p (vector-ref args 3))
+     (define u (vector-ref args 4))
+     (define w (vector-ref args 5))
+     (and sh
+          (not (and (number? rn) (= rn 15)
+                    (or (equal? p 0) (equal? w 1))))
+          (if (full-transfer-immediate? op-name)
+              (let* ([offset (vector-ref args 2)]
+                     [imm8 (and (or (term? offset)
+                                    (and (number? offset) (>= offset 0) (< offset 256)))
+                                offset)])
+                (and imm8
+                     (word (bits cond-code 28)
+                           #x00000090
+                           (bits p 24)
+                           (bits u 23)
+                           #x00400000
+                           (bits w 21)
+                           (if (full-transfer-load? op-name) #x00100000 0)
+                           (bits rn 16)
+                           (bits rd 12)
+                           (bits (bitwise-and (rshift imm8 4) #xf) 8)
+                           (bits sh 5)
+                           (bitwise-and imm8 #xf))))
+              (let ([rm (reg4 machine (vector-ref args 2))])
+                (word (bits cond-code 28)
+                      #x00000090
+                      (bits p 24)
+                      (bits u 23)
+                      (bits w 21)
+                      (if (full-transfer-load? op-name) #x00100000 0)
+                      (bits rn 16)
+                      (bits rd 12)
+                      (bits sh 5)
+                      rm))))]
     [(sym-member? op-name '(ldrh# strh# ldrsb# ldrsh#))
      (define raw-offset (vector-ref args 2))
      (define positive? (or (not (number? raw-offset)) (>= raw-offset 0)))
@@ -589,22 +686,43 @@
   (define rd (reg4 machine (vector-ref args 0)))
   (define rm (reg4 machine (vector-ref args 1)))
   (define rn (reg4 machine (vector-ref args 2)))
-  (word (bits cond-code 28)
-        #x01000090
-        (if (equal? op-name 'swpb) #x00400000 0)
-        (bits rn 16)
-        (bits rd 12)
-        rm))
+  (and (not (and (number? rn) (= rn 15)))
+       (not (and (number? rd) (= rd 15)))
+       (not (and (number? rm) (= rm 15)))
+       (word (bits cond-code 28)
+             #x01000090
+             (if (equal? op-name 'swpb) #x00400000 0)
+             (bits rn 16)
+             (bits rd 12)
+             rm)))
 
 (define (encode-block-transfer machine cond-code op-name args)
   (define rn (reg4 machine (vector-ref args 0)))
   (define regmask (bitwise-and (vector-ref args 1) #xffff))
-  (word (bits cond-code 28)
-        #x08000000
-        #x00800000
-        (if (equal? op-name 'ldm#) #x00100000 0)
-        (bits rn 16)
-        regmask))
+  (cond
+    [(sym-member? op-name '(ldm-full# stm-full#))
+     (define p (vector-ref args 2))
+     (define u (vector-ref args 3))
+     (define w (vector-ref args 4))
+     (and (not (= regmask 0))
+          (not (and (number? rn) (= rn 15)))
+          (word (bits cond-code 28)
+                #x08000000
+                (bits p 24)
+                (bits u 23)
+                (bits w 21)
+                (if (equal? op-name 'ldm-full#) #x00100000 0)
+                (bits rn 16)
+                regmask))]
+    [else
+     (and (not (= regmask 0))
+          (not (and (number? rn) (= rn 15)))
+          (word (bits cond-code 28)
+                #x08000000
+                #x00800000
+                (if (equal? op-name 'ldm#) #x00100000 0)
+                (bits rn 16)
+                regmask))]))
 
 (define (arm-inst->word-by-name machine op-name cond-code shf-id args)
   (cond
@@ -639,11 +757,14 @@
     [(sym-member? op-name '(bfi bfc sbfx ubfx)) (encode-bitfield machine cond-code op-name args)]
     [(sym-member? op-name '(rev rev16 revsh rbit)) (encode-reverse machine cond-code op-name args)]
     [(equal? op-name 'clz) (encode-clz machine cond-code args)]
-    [(word-transfer? op-name) (encode-load-store machine cond-code op-name args)]
-    [(sym-member? op-name '(ldrh ldrh# strh strh# ldrsb ldrsb# ldrsh ldrsh#))
+    [(word-transfer? op-name) (encode-load-store machine cond-code op-name shf-id args)]
+    [(sym-member? op-name '(ldrh ldrh# strh strh# ldrsb ldrsb# ldrsh ldrsh#
+                            ldrh-full ldrh-full# ldrsb-full ldrsb-full#
+                            ldrsh-full ldrsh-full# strh-full strh-full#))
      (encode-halfword-transfer machine cond-code op-name args)]
     [(sym-member? op-name '(swp swpb)) (encode-swp machine cond-code op-name args)]
-    [(sym-member? op-name '(ldm# stm#)) (encode-block-transfer machine cond-code op-name args)]
+    [(sym-member? op-name '(ldm# stm# ldm-full# stm-full#))
+     (encode-block-transfer machine cond-code op-name args)]
     [else
      (raise-user-error 'arm-inst->word
                        "no canonical ARM32 encoder for opcode ~s"

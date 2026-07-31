@@ -13,13 +13,15 @@
     (init-field [get-fresh-val #f]
                 [init (make-hash)]
                 [update (make-hash)]
+                [scratch-addr-allowed? (lambda (addr) #f)]
                 ;; If this memory object is for interpreting specification program,
                 ;; don't initialize ref.
                 ;; Otherwise, initailize ref with memory object output from specification program.
                 [ref #f]) ;; TODO: do we ever use ref?
     (public load store clone correctness-cost
             ;; for backward interpret
-            del lookup-update
+            del lookup-update update-contains? scratch-address-allowed?
+            updates-eq-allowing-candidate-scratch?
             get-update-addr-val get-update-addr-with-val get-addr-with-val get-available-addr
             get-live-mask)
     
@@ -44,12 +46,14 @@
       
     ;; Clone a new memory object with the same init and update.
     ;; Use this method to clone new memory for every program interpretation.
-    (define (clone [ref #f])
+    (define (clone [ref #f] [scratch-pred scratch-addr-allowed?])
       (new memory-racket% [ref ref] [init init]
-           [update (make-hash (hash->list update))] [get-fresh-val get-fresh-val]))
+           [update (make-hash (hash->list update))] [get-fresh-val get-fresh-val]
+           [scratch-addr-allowed? scratch-pred]))
     
     (define/public (clone-init)
-      (new memory-racket% [ref ref] [init init]))
+      (new memory-racket% [ref ref] [init init]
+           [scratch-addr-allowed? scratch-addr-allowed?]))
       ;; (if (hash-empty? update)
       ;;     this
       ;;     (new memory-racket% [ref ref] [init init])))
@@ -97,6 +101,22 @@
     
     (define/public (lookup-init addr) (lookup init addr))
     (define (lookup-update addr) (lookup update addr))
+    (define (update-contains? addr) (hash-has-key? update addr))
+    (define (scratch-address-allowed? addr) (scratch-addr-allowed? addr))
+
+    (define (updates-eq-allowing-candidate-scratch? candidate)
+      (and
+       (for/and ([pair (hash->list update)])
+                (let ([addr (car pair)]
+                      [val (cdr pair)])
+                  (and (send candidate update-contains? addr)
+                       (equal? (send candidate lookup-update addr) val))))
+       (for/and ([pair (send candidate get-update-addr-val)])
+                (let ([addr (car pair)]
+                      [val (cdr pair)])
+                  (if (update-contains? addr)
+                      (equal? (lookup-update addr) val)
+                      (send candidate scratch-address-allowed? addr))))))
 
     (define (modify storage addr val)
       (hash-set! storage addr val))
@@ -136,10 +156,11 @@
 
     (define (store-cand addr val mem-ref)
       ;; legal to update if that address is used for spec.
-      (cond
-        [(send mem-ref lookup-update addr)
-         (store-spec addr val)]
-        [else (assert #f "store illegal address")]))
+      (define allowed?
+        (or (send mem-ref update-contains? addr)
+            (scratch-addr-allowed? addr)))
+      (assert allowed? "store illegal address")
+      (store-spec addr val))
       
     
     (define (store addr val)
@@ -214,4 +235,3 @@
 (define t2 (current-milliseconds))
 (- t2 t1)
 |#
-

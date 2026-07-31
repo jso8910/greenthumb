@@ -16,7 +16,7 @@
       )
 
     (define/override (get-val-range type)
-      (if (equal? type 'z)
+      (if (member type '(n z c v))
           -1
           (super get-val-range type)))
 

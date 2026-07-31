@@ -2,7 +2,41 @@
 
 (require "path.rkt" "stat.rkt")
 
-(provide parallel-driver%)
+(provide parallel-driver% two-phase-improvement-window)
+
+(define (normalize-nonnegative-number who value)
+  (cond
+   [(not value) #f]
+   [(number? value)
+    (if (>= value 0)
+        value
+        (raise-user-error who "expected a non-negative number, got ~a" value))]
+   [(string? value)
+    (define parsed (string->number value))
+    (if (and (number? parsed) (>= parsed 0))
+        parsed
+        (raise-user-error who "expected a non-negative number, got ~a" value))]
+   [else
+    (raise-user-error who "expected a non-negative number, got ~a" value)]))
+
+(define (two-phase-improvement-window time-limit elapsed-time post-correct-time post-correct-remaining-frac)
+  (define numeric-time-limit
+    (normalize-nonnegative-number 'time-limit time-limit))
+  (define numeric-elapsed-time
+    (normalize-nonnegative-number 'elapsed-time elapsed-time))
+  (define remaining-time
+    (max 0 (- numeric-time-limit numeric-elapsed-time)))
+  (define windows '())
+  (define seconds
+    (normalize-nonnegative-number 'post-correct-time post-correct-time))
+  (define fraction
+    (normalize-nonnegative-number 'post-correct-remaining-frac post-correct-remaining-frac))
+  (when seconds
+        (set! windows (cons seconds windows)))
+  (when fraction
+        (set! windows (cons (* remaining-time fraction) windows)))
+  (and (not (empty? windows))
+       (apply min windows)))
 
 (define (get-free-mem)
   (string->number
@@ -27,8 +61,9 @@
     (define (get-class-name x) (format "~a-~a%" isa x))
     
     ;; Optimize code
-    (define (optimize-inner code-org live-out-org rootdir cores time-limit prog-size 
-                            assume input-file start-prog)
+    (define (optimize-inner code-org live-out-org rootdir cores time-limit prog-size
+                            assume input-file start-prog
+                            post-correct-time post-correct-remaining-frac)
       ;;(raise "done")
       (pretty-display (format "SEACH TYPE: ~a size=~a" search-type prog-size))
       ;;(define path (format "~a/driver" dir))
@@ -42,6 +77,8 @@
       ;; Use the fewest number of registers possible.
       (define-values (code live-out map-back machine-config) 
         (send printer compress-state-space code-org live-out-org))
+      (define stack-scratch-config
+        (send machine remap-stack-scratch-config map-back))
       (when restriction-file
             (send machine set-restriction-reg-map! map-back))
       (pretty-display (format ">>> machine-config: ~a" machine-config))
@@ -84,6 +121,12 @@
                (pretty-display (format "(define machine (new ~a [config ~a]))"
                                        (get-class-name "machine")
                                        (send printer set-config-string machine-config)))
+               (when stack-scratch-config
+                     (pretty-display
+                      (format "(send machine set-stack-scratch-config! ~a ~a '~a)"
+                              (list-ref stack-scratch-config 0)
+                              (list-ref stack-scratch-config 1)
+                              (list-ref stack-scratch-config 2))))
                (when restriction-file
                      (pretty-display
                       (format "(send machine set-restriction-reg-map! '~s)" map-back))
@@ -165,7 +208,7 @@
                         (and (file-exists? name)
                              (create-stat-from-file name printer)))))
           (with-handlers* 
-           ([exn? (lambda (e) (pretty-display "Error: print stat"))])
+           ([exn? (lambda (e) (pretty-display (format "Error: print stat: ~a" (exn-message e))))])
            (when (> cores-stoch 0)
                  (print-stat-all (filter identity (take stats cores-stoch)) printer))
            )
@@ -287,12 +330,38 @@
         (newline)
         
         (define (result)
-	  (define limit (if (string? time-limit) 
-			    (string->number time-limit) 
-			    time-limit))
+	  (define limit (normalize-nonnegative-number 'time-limit time-limit))
+          (define post-correct-deadline #f)
+          (define (maybe-start-post-correct-phase!)
+            (when (not post-correct-deadline)
+              (define-values (cost len best-time id) (get-best-info dir))
+              (when cost
+                (define improvement-window
+                  (two-phase-improvement-window limit
+                                                (- (current-seconds) t)
+                                                post-correct-time
+                                                post-correct-remaining-frac))
+                (when improvement-window
+                  (set! post-correct-deadline
+                        (+ (current-seconds) improvement-window))
+                  (pretty-display
+                   (format
+                    ">>> two-phase stopping: correct program found; continuing for ~a s"
+                    improvement-window))))))
+          (define (within-time-limit?)
+            (< (- (current-seconds) t) limit))
+          (define (within-post-correct-window?)
+            (or (not post-correct-deadline)
+                (< (current-seconds) post-correct-deadline)))
           (define (update-stats)
-            (sleep 10)
-            (when (and (< (- (current-seconds) t) limit));(> (get-free-mem) 1000000))
+            (sleep (if (or post-correct-deadline
+                           post-correct-time
+                           post-correct-remaining-frac)
+                       1
+                       10))
+            (maybe-start-post-correct-phase!)
+            (when (and (within-time-limit?)
+                       (within-post-correct-window?));(> (get-free-mem) 1000000))
                   (for ([id (length processes-stoch)]
                         [sp processes-stoch])
                        (unless (equal? (subprocess-status sp) 'running)
@@ -311,6 +380,10 @@
           (with-handlers* 
            ([exn:break? (lambda (e) (kill-all) (sleep 5))])
            (update-stats)
+           (when (and post-correct-deadline
+                      (not (within-post-correct-window?)))
+                 (pretty-display
+                  ">>> two-phase stopping: improvement window expired"))
            (kill-all)))
 
         ;; STEP 2: wait until timeout or optimal program is found.
@@ -395,9 +468,13 @@
                       #:time-limit [time-limit 3600]
                       #:size [size #f]
                       #:input-file [input-file #f]
-                      #:start-prog [start-prog #f])
+                      #:start-prog [start-prog #f]
+                      #:post-correct-time [post-correct-time #f]
+                      #:post-correct-remaining-frac [post-correct-remaining-frac #f])
       (if (> (vector-length code-org) 0)
-          (optimize-inner code-org live-out dir cores time-limit size assume input-file start-prog)
+          (optimize-inner code-org live-out dir cores time-limit size
+                          assume input-file start-prog
+                          post-correct-time post-correct-remaining-frac)
           code-org))
 
     ))

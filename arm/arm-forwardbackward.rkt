@@ -27,9 +27,16 @@
     (define/override (mask-in state-vec live-list #:keep-flag [keep #t])
       (define masked (super mask-in state-vec live-list #:keep-flag keep))
       (if keep
-          (let ([z (progstate-z state-vec)])
-            (set-progstate-z! masked z))
-          (set-progstate-z! masked -1))
+          (begin
+            (set-progstate-n! masked (progstate-n state-vec))
+            (set-progstate-zf! masked (progstate-zf state-vec))
+            (set-progstate-c! masked (progstate-c state-vec))
+            (set-progstate-v! masked (progstate-v state-vec)))
+          (begin
+            (set-progstate-n! masked -1)
+            (set-progstate-zf! masked -1)
+            (set-progstate-c! masked -1)
+            (set-progstate-v! masked -1)))
       masked)
 
     (define cmp-inst (get-field cmp-inst machine))

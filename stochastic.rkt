@@ -120,9 +120,10 @@
                  (send machine display-state i))
             )
       (define spec-allowed? (send machine program-allowed? spec))
-      (set-field! best-correct-program stat (and spec-allowed? spec))
+      (define seed-best-correct? (and (not syn-mode) spec-allowed?))
+      (set-field! best-correct-program stat (and seed-best-correct? spec))
       (set-field! best-correct-cost stat
-                  (if spec-allowed?
+                  (if seed-best-correct?
                       (send simulator performance-cost spec)
                       w-error))
       (send stat set-name name)

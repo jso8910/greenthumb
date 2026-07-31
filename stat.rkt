@@ -100,6 +100,7 @@
       (set! best-correct-cost cost)
       (set! best-correct-len (vector-length program))
       (set! best-correct-time (- (current-seconds) start-time))
+      (when name (print-stat-to-file))
       (pretty-display `(time ,best-correct-time))
 
       (when dir
@@ -172,13 +173,17 @@
 
       (pretty-display (format "Mutate\tProposed\t\tAccepted\t\tAccepted/Proposed"))
       (for ([i n])
-           (pretty-display (format "~a\t~a\t~a\t~a" 
-                                   (vector-ref stat-mutations i)
-                                   (exact->inexact (/ (vector-ref propose-stat i) proposed))
-                                   (exact->inexact (/ (vector-ref accept-stat i) proposed))
-                                   (if (> (vector-ref propose-stat i) 0)
-                                       (exact->inexact (/ (vector-ref accept-stat i) (vector-ref propose-stat i)))
-                                       0))))
+	   (pretty-display (format "~a\t~a\t~a\t~a" 
+	                                   (vector-ref stat-mutations i)
+	                                   (if (> proposed 0)
+	                                       (exact->inexact (/ (vector-ref propose-stat i) proposed))
+	                                       0)
+	                                   (if (> proposed 0)
+	                                       (exact->inexact (/ (vector-ref accept-stat i) proposed))
+	                                       0)
+	                                   (if (> (vector-ref propose-stat i) 0)
+	                                       (exact->inexact (/ (vector-ref accept-stat i) (vector-ref propose-stat i)))
+	                                       0))))
       (newline)
       ;; (pretty-display (format "acceptance-rate:\t~a" 
       ;;                         (exact->inexact (/ accepted proposed))))
@@ -220,8 +225,17 @@
 (define (print-stat-all stat-list printer)
   (define stat-mutations (get-field report-mutations printer))
   (define n (vector-length stat-mutations))
+  (define infinite-cost (arithmetic-shift 1 32))
+  (define (number-or-zero x)
+    (if (number? x) x 0))
+  (define (cost-or-infinite x)
+    (if (number? x) x infinite-cost))
+  (define (safe-ratio x y)
+    (if (and (number? y) (> y 0))
+        (ratio x y)
+        0))
   (define-syntax-rule (reduce+ field)
-    (foldl + 0 (map (lambda (x) (get-field field x)) stat-list)))
+    (foldl + 0 (map (lambda (x) (number-or-zero (get-field field x))) stat-list)))
 
   ;(pretty-display "time")
   (define time (reduce+ time))
@@ -246,23 +260,23 @@
   ;(pretty-display "propose-stat")
   (define propose-stat
     (for/vector ([i n])
-      (foldl + 0 (map (lambda (x) (vector-ref (get-field propose-stat x) i))
+      (foldl + 0 (map (lambda (x) (number-or-zero (vector-ref (get-field propose-stat x) i)))
                       stat-list))))
   ;(pretty-display "accept-stat")
   (define accept-stat
     (for/vector ([i n])
-      (foldl + 0 (map (lambda (x) (vector-ref (get-field accept-stat x) i)) 
+      (foldl + 0 (map (lambda (x) (number-or-zero (vector-ref (get-field accept-stat x) i))) 
                       stat-list))))
 
-  (define best-correct-cost (arithmetic-shift 1 32))
-  (define best-correct-time (arithmetic-shift 1 32))
-  (define best-cost (arithmetic-shift 1 32))
+  (define best-correct-cost infinite-cost)
+  (define best-correct-time infinite-cost)
+  (define best-cost infinite-cost)
 
   (for ([stat stat-list]
         [id (length stat-list)])
-       (let ([correct-cost (get-field best-correct-cost stat)]
-             [correct-time (get-field best-correct-time stat)]
-             [cost (get-field best-cost stat)])
+       (let ([correct-cost (cost-or-infinite (get-field best-correct-cost stat))]
+             [correct-time (cost-or-infinite (get-field best-correct-time stat))]
+             [cost (cost-or-infinite (get-field best-cost stat))])
          (when (< correct-cost best-correct-cost)
                (set! best-correct-cost correct-cost)
                (set! best-correct-time correct-time)
@@ -277,16 +291,16 @@
 
   (define stat (new stat%
                     [printer printer]
-                    [time (quotient time (length stat-list))]
-                    [mutate-time (ratio (/ mutate-time 1000) time)]
-                    [simulate-time (ratio (/ simulate-time 1000) time)]
-                    [check-time (ratio (/ check-time 1000) time)]
-                    [validate-time (ratio (/ validate-time 1000) time)]
+                    [time (if (null? stat-list) 0 (quotient time (length stat-list)))]
+                    [mutate-time (safe-ratio (/ mutate-time 1000) time)]
+                    [simulate-time (safe-ratio (/ simulate-time 1000) time)]
+                    [check-time (safe-ratio (/ check-time 1000) time)]
+                    [validate-time (safe-ratio (/ validate-time 1000) time)]
                     [iter-count iter-count]
-                    [validate-count (ratio validate-count iter-count)]
-                    [correct-count (ratio correct-count iter-count)]
-                    [accept-count (ratio accept-count iter-count)]
-                    [accept-higher-count (ratio accept-higher-count iter-count)]
+                    [validate-count (safe-ratio validate-count iter-count)]
+                    [correct-count (safe-ratio correct-count iter-count)]
+                    [accept-count (safe-ratio accept-count iter-count)]
+                    [accept-higher-count (safe-ratio accept-higher-count iter-count)]
                     ;[misalign-count (ratio misalign-count iter-count)]
                     [propose-stat propose-stat]
                     [accept-stat accept-stat]

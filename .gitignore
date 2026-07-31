@@ -4,3 +4,5 @@ vpe
 path.rkt
 .DS_Store
 .tools
+arm/restriction-superopt/output/
+arm/restriction-superopt/generated/*/out/

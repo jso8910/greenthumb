@@ -11,6 +11,54 @@
 
 (provide optimize)
 
+(define (parse-reg-id value)
+  (and (string? value)
+       (regexp-match? #rx"^r[0-9]+$" value)
+       (string->number (substring value 1))))
+
+(define (parse-number value)
+  (cond
+   [(number? value) value]
+   [(string? value) (string->number value)]
+   [else #f]))
+
+(define (stack-scratch-offset? offset stack-size direction)
+  (and offset
+       (cond
+        [(equal? direction 'downwards) (and (< offset 0) (<= (- offset) stack-size))]
+        [(equal? direction 'upwards) (and (> offset 0) (<= offset stack-size))]
+        [else #f])))
+
+(define (stack-scratch-only-store? my-inst stack-scratch-config)
+  (and stack-scratch-config
+       (let* ([op (vector-ref (inst-op my-inst) 0)]
+              [args (inst-args my-inst)])
+         (and (member op '("str" "strb" "strh"))
+              (= (vector-length args) 3)
+              (let ([base-reg (parse-reg-id (vector-ref args 1))]
+                    [offset (parse-number (vector-ref args 2))]
+                    [sp-reg (list-ref stack-scratch-config 0)]
+                    [stack-size (list-ref stack-scratch-config 1)]
+                    [direction (list-ref stack-scratch-config 2)])
+                (and base-reg
+                     (= base-reg sp-reg)
+                     (stack-scratch-offset? offset stack-size direction)))))))
+
+(define (memory-writing-inst? my-inst stack-scratch-config)
+  (define op (vector-ref (inst-op my-inst) 0))
+  (cond
+   [(member op '("str" "strb" "strh"))
+    (not (stack-scratch-only-store? my-inst stack-scratch-config))]
+   [(member op '("stm" "swp" "swpb")) #t]
+   [else #f]))
+
+(define (augment-live-out code live-out stack-scratch-config)
+  (if (or (member 'memory live-out)
+          (not (for/or ([my-inst code])
+                 (memory-writing-inst? my-inst stack-scratch-config))))
+      live-out
+      (append live-out '(memory))))
+
 ;; Main function to perform superoptimization on multiple cores.
 ;; >>> INPUT >>>
 ;; code: program to superoptimized in string-IR format
@@ -24,15 +72,25 @@
                   #:window [window #f]
                   #:input-file [input-file #f]
                   #:restriction-file [restriction-file #f]
-                  #:solver-name [solver-name 'kodkod])
+                  #:solver-name [solver-name 'kodkod]
+                  #:stack-scratch-config [stack-scratch-config #f]
+                  #:post-correct-time [post-correct-time #f]
+                  #:post-correct-remaining-frac [post-correct-remaining-frac #f])
   (define normalized-solver-name (normalize-solver-name solver-name))
   (define normalized-restriction-file
     (and restriction-file
          (path->string (simplify-path (path->complete-path restriction-file)))))
   (define parser (new arm-parser%))
   (define machine (new arm-machine%))
+  (when stack-scratch-config
+        (send machine set-stack-scratch-config!
+              (list-ref stack-scratch-config 0)
+              (list-ref stack-scratch-config 1)
+              (list-ref stack-scratch-config 2)))
   (when normalized-restriction-file
         (send machine load-restrictions! normalized-restriction-file))
+  (define effective-live-out
+    (augment-live-out code live-out stack-scratch-config))
   (define printer (new arm-printer% [machine machine]))
   (define simulator (new arm-simulator-rosette% [machine machine]))
   (define validator (new arm-validator% [machine machine] [simulator simulator]
@@ -44,9 +102,11 @@
                         [restriction-file normalized-restriction-file]
                         [solver-name normalized-solver-name]))
 
-  (send parallel optimize code live-out 
+  (send parallel optimize code effective-live-out 
         #:dir dir #:cores cores 
-        #:time-limit time-limit #:size size #:input-file input-file)
+        #:time-limit time-limit #:size size #:input-file input-file
+        #:post-correct-time post-correct-time
+        #:post-correct-remaining-frac post-correct-remaining-frac)
   )
   
 ;; (define (arm-generate-inputs code machine-config dir)

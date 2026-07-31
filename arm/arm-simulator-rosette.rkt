@@ -39,6 +39,17 @@
     ;; helper functions
     (define-syntax-rule (bool->num b) (if b 1 0))
 
+    (define (u8 x) (bitwise-and x #xff))
+    (define (u16 x) (bitwise-and x #xffff))
+
+    (define (sign-extend-byte x)
+      (let ([byte (u8 x)])
+        (if (>= byte #x80) (finitize-bit (bitwise-ior byte #xffffff00)) byte)))
+
+    (define (sign-extend-half x)
+      (let ([half (u16 x)])
+        (if (>= half #x8000) (finitize-bit (bitwise-ior half #xffff0000)) half)))
+
     (define-syntax-rule (bvop op)     
       (lambda (x y) (finitize-bit (op x y))))
 
@@ -200,19 +211,23 @@
                    (shl (bool->num z) 2)
                    (shl (bool->num c) 1)
                    (bool->num v)))
+    (define (sign-set? value)
+      (= (bitwise-bit-field (u32 value) (sub1 bit) bit) 1))
+    (define (zero-u32? value)
+      (= (u32 value) 0))
     (define (same-cv-flags result old-flags)
-      (pack-flags (< (finitize-bit result) 0)
-                  (= (finitize-bit result) 0)
+      (pack-flags (sign-set? result)
+                  (zero-u32? result)
                   (= (flag-c old-flags) 1)
                   (= (flag-v old-flags) 1)))
     (define (same-cv-flags64 lo hi old-flags)
-      (pack-flags (< (finitize-bit hi) 0)
-                  (and (= (finitize-bit lo) 0) (= (finitize-bit hi) 0))
+      (pack-flags (sign-set? hi)
+                  (and (zero-u32? lo) (zero-u32? hi))
                   (= (flag-c old-flags) 1)
                   (= (flag-v old-flags) 1)))
     (define (logical-flags result carry old-flags)
-      (pack-flags (< (finitize-bit result) 0)
-                  (= (finitize-bit result) 0)
+      (pack-flags (sign-set? result)
+                  (zero-u32? result)
                   carry
                   (= (flag-v old-flags) 1)))
     (define (u32 x) (bitwise-and x mask))
@@ -224,18 +239,26 @@
       (>= (+ (u32 x) (u32 y) (bool->num carry)) unsigned-limit))
     (define (sub-carry-out x y borrow)
       (>= (u32 x) (+ (u32 y) (bool->num borrow))))
-    (define (signed-overflow? raw)
-      (or (< raw signed-min) (> raw signed-max)))
+    (define (add-overflow? x y result)
+      (define sx (sign-set? x))
+      (define sy (sign-set? y))
+      (define sr (sign-set? result))
+      (and (equal? sx sy) (not (equal? sx sr))))
+    (define (sub-overflow? x y result)
+      (define sx (sign-set? x))
+      (define sy (sign-set? y))
+      (define sr (sign-set? result))
+      (and (not (equal? sx sy)) (not (equal? sx sr))))
     (define (add-flags x y carry result)
-      (pack-flags (< result 0)
-                  (= result 0)
+      (pack-flags (sign-set? result)
+                  (zero-u32? result)
                   (add-carry-out x y carry)
-                  (signed-overflow? (+ x y (bool->num carry)))))
+                  (add-overflow? x y result)))
     (define (sub-flags x y borrow result)
-      (pack-flags (< result 0)
-                  (= result 0)
+      (pack-flags (sign-set? result)
+                  (zero-u32? result)
                   (sub-carry-out x y borrow)
-                  (signed-overflow? (- x y (bool->num borrow)))))
+                  (sub-overflow? x y result)))
 
     (define (condition-holds? cond-type flags)
       (define n (= (flag-n flags) 1))
@@ -267,7 +290,34 @@
       (define inst-choice (get-field inst-choice-name machine))
       (define regs (vector-copy (progstate-regs state)))
       (define memory #f)
-      (define z (progstate-z state))
+      (define z (pack-flags (= (progstate-n state) 1)
+                            (= (progstate-zf state) 1)
+                            (= (progstate-c state) 1)
+                            (= (progstate-v state) 1)))
+
+      (define (make-stack-scratch-addr-allowed? initial-regs)
+        (define stack-config (send machine get-stack-scratch-config))
+        (cond
+         [stack-config
+          (let* ([sp-reg (list-ref stack-config 0)]
+                 [stack-size (list-ref stack-config 1)]
+                 [direction (list-ref stack-config 2)]
+                 [sp (vector-ref initial-regs sp-reg)]
+                 [deltas
+                  (for/list ([offset (in-range 1 (add1 stack-size))])
+                            (if (equal? direction 'downwards)
+                                (- offset)
+                                offset))])
+            (define (allowed? addr offsets)
+              (if (empty? offsets)
+                  #f
+                  (or (equal? addr (finitize-bit (+ sp (car offsets))))
+                      (allowed? addr (cdr offsets)))))
+            (lambda (addr) (allowed? addr deltas)))]
+         [else (lambda (addr) #f)]))
+
+      (define stack-scratch-addr-allowed?
+        (make-stack-scratch-addr-allowed? regs))
 
       (define (interpret-step step)
         (define ops-vec (inst-op step))
@@ -290,10 +340,48 @@
 		   (equal? a shfop-name))
 	      ...))
 
-        (define-syntax-rule (args-ref args i) (vector-ref args i))
+	        (define-syntax-rule (args-ref args i) (vector-ref args i))
 
-        (define (exec)
-          (define old-carry (= (flag-c z) 1))
+	        (define (exec)
+	          (define old-carry (= (flag-c z) 1))
+
+          (define (reg-val id [pc-delta 0])
+            (define value (vector-ref regs id))
+            (if (= id 15) (finitize-bit (+ value pc-delta)) value))
+
+          (define (ensure-memory!)
+            (unless memory
+              (set! memory (send* (progstate-memory state) clone
+                                  (and ref (progstate-memory ref))
+                                  stack-scratch-addr-allowed?))))
+
+          (define (mem-addr addr offset)
+            (finitize-bit (+ addr offset)))
+
+          (define (mem-load-width addr width)
+            (ensure-memory!)
+            (cond
+             [(= width 8)
+              (u8 (send* memory load (mem-addr addr 0)))]
+             [(= width 16)
+              (bitwise-ior
+               (u8 (send* memory load (mem-addr addr 0)))
+               (shl (u8 (send* memory load (mem-addr addr 1))) 8))]
+             [(= width 32)
+              (finitize-bit
+               (bitwise-ior
+                (u8 (send* memory load (mem-addr addr 0)))
+                (shl (u8 (send* memory load (mem-addr addr 1))) 8)
+                (shl (u8 (send* memory load (mem-addr addr 2))) 16)
+                (shl (u8 (send* memory load (mem-addr addr 3))) 24)))]
+             [else (assert #f (format "unsupported memory load width: ~a" width))]))
+
+          (define (mem-store-width addr val width)
+            (ensure-memory!)
+            (for ([byte-index (in-range (quotient width 8))])
+              (send* memory store
+                     (mem-addr addr byte-index)
+                     (u8 (ushr val (* 8 byte-index))))))
 
           (define (shift-carry value amount direction)
             (cond
@@ -466,44 +554,41 @@
             (define d (args-ref args 0))
             (define a (args-ref args 1))
             (define b (args-ref args 2))
+            (define offset
+              (if (and (not reg-offset) (inst-eq `str#))
+                  (* 4 b)
+                  b))
             (define index 
               (if reg-offset
                   (+ (vector-ref regs a) (vector-ref regs b))
-                  (+ (vector-ref regs a) b)))
-            (define val
+                  (+ (vector-ref regs a) offset)))
+            (define store-width
               (cond
-               [(inst-eq `strb `strb#) (bitwise-and (vector-ref regs d) #xff)]
-               [(inst-eq `strh `strh#) (bitwise-and (vector-ref regs d) #xffff)]
-               [else (vector-ref regs d)]))
-            (unless memory
-              (set! memory (send* (progstate-memory state) clone
-                                 (and ref (progstate-memory ref)))))
-            (send* memory store (finitize-bit index) val))
+               [(inst-eq `strb `strb#) 8]
+               [(inst-eq `strh `strh#) 16]
+               [else 32]))
+            (mem-store-width index (reg-val d 4) store-width))
 
           ;; load
           (define (ldr reg-offset)
             (define d (args-ref args 0))
             (define a (args-ref args 1))
             (define b (args-ref args 2))
+            (define offset
+              (if (and (not reg-offset) (inst-eq `ldr#))
+                  (* 4 b)
+                  b))
             (define index 
               (if reg-offset
                   (+ (vector-ref regs a) (vector-ref regs b))
-                  (+ (vector-ref regs a) b)))
-            (unless memory
-              (set! memory (send* (progstate-memory state) clone
-                                 (and ref (progstate-memory ref)))))
-            (define raw-val (send* memory load (finitize-bit index)))
+                  (+ (vector-ref regs a) offset)))
             (define val
               (cond
-               [(inst-eq `ldrb `ldrb#) (bitwise-and raw-val #xff)]
-               [(inst-eq `ldrh `ldrh#) (bitwise-and raw-val #xffff)]
-               [(inst-eq `ldrsb `ldrsb#)
-                (let ([byte (bitwise-and raw-val #xff)])
-                  (if (>= byte #x80) (finitize-bit (bitwise-ior byte #xffffff00)) byte))]
-               [(inst-eq `ldrsh `ldrsh#)
-                (let ([half (bitwise-and raw-val #xffff)])
-                  (if (>= half #x8000) (finitize-bit (bitwise-ior half #xffff0000)) half))]
-               [else raw-val]))
+               [(inst-eq `ldrb `ldrb#) (mem-load-width index 8)]
+               [(inst-eq `ldrh `ldrh#) (mem-load-width index 16)]
+               [(inst-eq `ldrsb `ldrsb#) (sign-extend-byte (mem-load-width index 8))]
+               [(inst-eq `ldrsh `ldrsh#) (sign-extend-half (mem-load-width index 16))]
+               [else (mem-load-width index 32)]))
             (vector-set! regs d val))
 
           (define (swp)
@@ -511,29 +596,22 @@
             (define m (args-ref args 1))
             (define n (args-ref args 2))
             (define index (vector-ref regs n))
-            (unless memory
-              (set! memory (send* (progstate-memory state) clone
-                                 (and ref (progstate-memory ref)))))
-            (define raw-val (send* memory load (finitize-bit index)))
-            (define loaded (if (inst-eq `swpb) (bitwise-and raw-val #xff) raw-val))
-            (define stored (if (inst-eq `swpb) (bitwise-and (vector-ref regs m) #xff) (vector-ref regs m)))
+            (define width (if (inst-eq `swpb) 8 32))
+            (define loaded (mem-load-width index width))
             (vector-set! regs d loaded)
-            (send* memory store (finitize-bit index) stored))
+            (mem-store-width index (reg-val m) width))
 
           (define (block-transfer load?)
             (define n (args-ref args 0))
             (define mask (args-ref args 1))
             (define base (vector-ref regs n))
-            (unless memory
-              (set! memory (send* (progstate-memory state) clone
-                                 (and ref (progstate-memory ref)))))
             (define offset 0)
             (for ([reg-id (in-range (min bit (vector-length regs)))])
               (when (= (bitwise-bit-field mask reg-id (add1 reg-id)) 1)
                 (define addr (finitize-bit (+ base (* 4 offset))))
                 (if load?
-                    (vector-set! regs reg-id (send* memory load addr))
-                    (send* memory store addr (vector-ref regs reg-id)))
+                    (vector-set! regs reg-id (mem-load-width addr 32))
+                    (mem-store-width addr (reg-val reg-id 4) 32))
                 (set! offset (add1 offset)))))
 
           ;; setbit
@@ -847,7 +925,12 @@
       (for ([x program])
            (interpret-step x))
       
-      (progstate regs (or memory (progstate-memory state)) z))
+      (progstate regs
+                 (or memory (progstate-memory state))
+                 (flag-n z)
+                 (flag-z z)
+                 (flag-c z)
+                 (flag-v z)))
 
     (define (performance-cost code)
       (define cost 0)

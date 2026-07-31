@@ -147,16 +147,47 @@
       (define max-reg 0)
 
       ;; Collect all used register ids.
+      (define (collect-reg-id! reg-id)
+        (when (number? reg-id)
+              (set-add! reg-set reg-id)
+              (when (> reg-id max-reg) (set! max-reg reg-id))))
+
+      (define (collect-reglist! mask)
+        (define parsed-mask
+          (cond
+           [(number? mask) mask]
+           [(string? mask) (string->number mask)]
+           [else #f]))
+        (when (number? parsed-mask)
+              (for ([reg-id (in-range 16)])
+                   (when (= (bitwise-bit-field parsed-mask reg-id (add1 reg-id)) 1)
+                         (collect-reg-id! reg-id)))))
+
       (define (inner-collect x)
 	(define (f r)
 	  (when (and r (> (string-length r) 1) (equal? (substring r 0 1) "r"))
-		(let ([reg-id (string->number (substring r 1))])
-		  (set-add! reg-set reg-id)
-		  (when (> reg-id max-reg) (set! max-reg reg-id)))))
+		(collect-reg-id! (string->number (substring r 1)))))
 
         (for ([args (inst-args x)])
              (and args (for ([arg args]) (f args)))))
+
+      (define (inner-collect-reglist x)
+        (define op (vector-ref (inst-op x) 0))
+        (define args (inst-args x))
+        (when (and (member op '("ldm" "stm"))
+                   (= (vector-length args) 2))
+              (collect-reglist! (vector-ref args 1))))
+
       (for ([x program]) (inner-collect x))
+      (for ([x program]) (inner-collect-reglist x))
+      (for ([live live-out])
+           (when (number? live) (collect-reg-id! live)))
+
+      (define stack-config (send machine get-stack-scratch-config))
+      (when stack-config
+            (define sp-reg (list-ref stack-config 0))
+            (set-add! reg-set sp-reg)
+            (when (> sp-reg max-reg) (set! max-reg sp-reg)))
 
       ;; Construct register map from original to compressed version.
       (set-add! reg-set (+ max-reg 1))
@@ -196,13 +227,24 @@
     (define/public (encode-live x)
       (define reg (make-vector (send machine get-config) #f))
       (define memory #f)
+      (define n #f)
       (define z #f)
+      (define c #f)
+      (define v #f)
       (for ([i x])
            (cond
             [(number? i) (vector-set! reg i #t)]
             [(equal? i 'memory) (set! memory #t)]
-            [(equal? i 'z) (set! z #t)]))
-      (progstate reg memory z))
+            [(equal? i 'n) (set! n #t)]
+            [(equal? i 'z) (set! z #t)]
+            [(equal? i 'c) (set! c #t)]
+            [(equal? i 'v) (set! v #t)]
+            [(member i '(flag flags nzcv))
+             (set! n #t)
+             (set! z #t)
+             (set! c #t)
+             (set! v #t)]))
+      (progstate reg memory n z c v))
 
     
     ;; Convert live-out (which is one of the outputs from 

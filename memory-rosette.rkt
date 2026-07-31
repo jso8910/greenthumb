@@ -27,6 +27,7 @@
                 [size memory-size]
                 [init (make-vector size)] ;; TODO: change to list
                 [update (make-vector size)]
+                [scratch-addr-allowed? (lambda (addr) #f)]
                 ;; [get-fresh-val
                 ;;  (lambda ()
                 ;;    (define-symbolic* val number?)
@@ -35,7 +36,9 @@
                 ;; don't initialize ref.
                 ;; Otherwise, initialize ref with memory object output from specification program.
                 [ref #f])
-    (public load store create-concrete clone)
+    (public load store create-concrete clone get-live-mask
+            update-contains? scratch-address-allowed?
+            assert-updates-eq-allowing-candidate-scratch)
     
     (define (cal-size l)
       (define ans 0)
@@ -68,9 +71,10 @@
 
     ;; Clone a new symbolic memory object with the same init.
     ;; Use this method to clone new memory for every program interpretation.
-    (define (clone [ref #f])
+    (define (clone [ref #f] [scratch-pred scratch-addr-allowed?])
       (new memory-rosette% [ref ref] [init init] [update (vector-copy update)]
-           [get-fresh-val get-fresh-val]))
+           [get-fresh-val get-fresh-val]
+           [scratch-addr-allowed? scratch-pred]))
 
     (define (init-new-val addr)
       (define (loop index)
@@ -100,9 +104,40 @@
                     ))))
       (loop 0))
 
+    (define (contains? storage addr)
+      (define (loop index)
+        (and (< index (vector-length storage))
+             (let ([pair (vector-ref storage index)])
+               (and (pair? pair)
+                    (or (equal? addr (car pair))
+                        (loop (add1 index)))))))
+      (loop 0))
     
     (define/public (lookup-init addr) (lookup init addr))
     (define/public (lookup-update addr) (lookup update addr))
+    (define (update-contains? addr) (contains? update addr))
+    (define (scratch-address-allowed? addr) (scratch-addr-allowed? addr))
+
+    (define (get-live-mask)
+      (for/or ([pair (vector->list update)])
+              (pair? pair)))
+
+    (define (assert-updates-eq-allowing-candidate-scratch candidate)
+      (for ([pair (vector->list update)])
+           (when (pair? pair)
+                 (define addr (car pair))
+                 (define val (cdr pair))
+                 (assert (send candidate update-contains? addr))
+                 (assert (equal? (send candidate lookup-update addr) val))))
+      (for ([pair (vector->list (get-field update candidate))])
+           (when (pair? pair)
+                 (define addr (car pair))
+                 (define val (cdr pair))
+                 (define spec-has-addr? (update-contains? addr))
+                 (assert
+                  (if spec-has-addr?
+                      (equal? (lookup-update addr) val)
+                      (send candidate scratch-address-allowed? addr))))))
 
     (define (modify storage addr val)
       (define (loop index)
@@ -142,10 +177,11 @@
 
     (define (store-cand addr val mem-ref)
       ;; legal to update if that address is used for spec.
-      (cond
-        [(send* mem-ref lookup-update addr)
-         (store-spec addr val)]
-        [else (assert #f "store illegal address")]))
+      (define allowed?
+        (or (send* mem-ref update-contains? addr)
+            (scratch-addr-allowed? addr)))
+      (assert allowed? "store illegal address")
+      (store-spec addr val))
       
     
     (define (store addr val)

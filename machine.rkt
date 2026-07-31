@@ -31,6 +31,7 @@
      [opcode-pool #f]        ;; Opcodes to be considered during synthesis.
      [isa-restrictions #f]   ;; Optional ISA-specific candidate restrictions.
      [restriction-reg-map #f]
+     [stack-scratch-config #f]
      )
     
     ;; Required methods to be implemented.
@@ -65,6 +66,9 @@
      load-restrictions! set-restrictions! get-restrictions restrictions-enabled?
      set-restriction-reg-map! get-restriction-reg-map
      restriction-word-allowed? inst-allowed? program-allowed?
+     set-stack-scratch-config! clear-stack-scratch-config!
+     get-stack-scratch-config stack-scratch-enabled?
+     remap-stack-scratch-config
 
      ;; For enumerative search
      get-inst-key
@@ -130,6 +134,11 @@
     (define (state-eq? state1 state2 pred)
       ;(pretty-display `(state-eq? ,state1 ,state2 ,pred))
       (cond
+       [(and (is-a? state1 memory-racket%)
+             (is-a? state2 memory-racket%))
+        (if (or pred (send state1 get-live-mask))
+            (send state1 updates-eq-allowing-candidate-scratch? state2)
+            #t)]
        [(equal? pred #t)
 	(equal? state1 state2)]
        [(equal? pred #f)
@@ -163,6 +172,53 @@
     (define (inst-allowed? my-inst) #t)
     (define (program-allowed? code)
       (for/and ([my-inst code]) (inst-allowed? my-inst)))
+
+    (define (normalize-stack-direction direction)
+      (cond
+       [(member direction '(up upwards upward)) 'upwards]
+       [(member direction '(down downwards downward)) 'downwards]
+       [else
+        (raise-user-error
+         'set-stack-scratch-config!
+         "stack direction must be 'upwards or 'downwards, got ~a"
+         direction)]))
+
+    (define (set-stack-scratch-config! sp-reg stack-size direction)
+      (unless (and (integer? sp-reg) (>= sp-reg 0))
+              (raise-user-error
+               'set-stack-scratch-config!
+               "stack pointer register must be a non-negative integer, got ~a"
+               sp-reg))
+      (unless (and (integer? stack-size) (> stack-size 0))
+              (raise-user-error
+               'set-stack-scratch-config!
+               "stack scratch size must be a positive integer, got ~a"
+               stack-size))
+      (set! stack-scratch-config
+            (list sp-reg stack-size (normalize-stack-direction direction))))
+
+    (define (clear-stack-scratch-config!)
+      (set! stack-scratch-config #f))
+
+    (define (get-stack-scratch-config) stack-scratch-config)
+
+    (define (stack-scratch-enabled?) (and stack-scratch-config #t))
+
+    (define (remap-stack-scratch-config reg-map-back)
+      (and stack-scratch-config
+           (let* ([sp-reg (list-ref stack-scratch-config 0)]
+                  [stack-size (list-ref stack-scratch-config 1)]
+                  [direction (list-ref stack-scratch-config 2)]
+                  [mapped-sp
+                   (for/first ([i (in-range (vector-length reg-map-back))]
+                               #:when (equal? (vector-ref reg-map-back i) sp-reg))
+                              i)])
+             (unless mapped-sp
+                     (raise-user-error
+                      'remap-stack-scratch-config
+                      "stack pointer register r~a was not present in compressed register map"
+                      sp-reg))
+             (list mapped-sp stack-size direction))))
 
     (define (get-state init #:concrete [concrete #t])
       (define (recursive-init structure init-min init-max init-const)
@@ -538,6 +594,9 @@
       (define ins (instclass-ins class))
       (define outs (instclass-outs class))
 
+      (define (register-arg? type)
+        (equal? (argtype-statetype (hash-ref argtypes-info type)) 'reg))
+
       ;; non-argument inputs have to be live
       (define pass #t)
       (when live-in
@@ -553,6 +612,18 @@
                 ([type types] [id (in-naturals)])
                 (cond
                  [(not pass) (vector)] ;; if not pass, return empty list
+                 [(and (register-arg? type) (member id ins) (member id outs))
+                  ;; Register operands that are both read and written only need
+                  ;; to be live-in.  If the register is not live-out, the write
+                  ;; is a legal clobber of dead state; if it is live-out,
+                  ;; correctness checking will still require the final value.
+                  (get-arg-range-of-type type live-in)]
+                 [(and (register-arg? type) (member id outs))
+                  ;; Any register may be modified unless it is constrained by
+                  ;; some other role.  Non-live-out registers are scratch
+                  ;; destinations, and live-out registers remain checked by the
+                  ;; output constraint.
+                  (get-arg-range-of-type type #f)]
                  [(and (member id ins) (member id outs))
                   (define vals (get-arg-range-of-type type live-in))
                   (get-arg-range-of-type type live-out #:vals (vector->list vals))]

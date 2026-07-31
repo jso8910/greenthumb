@@ -395,9 +395,9 @@
       (define (inner state1 state2 pred)
         ;;(pretty-display `(assert-eq ,pred ,state1 ,state2))
 	(cond
-         [(and pred (is-a?* state1 memory-rosette%))
-          (assert (equal? (get-field* update state1)
-                          (get-field* update state2)))]
+         [(and (is-a?* state1 memory-rosette%)
+               (or pred (send* state1 get-live-mask)))
+          (send* state1 assert-updates-eq-allowing-candidate-scratch state2)]
          
          [(and pred (or (is-a?* state1 queue-in-rosette%)
                         (is-a?* state2 queue-out-rosette%)))
