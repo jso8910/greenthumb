@@ -4,5 +4,7 @@
  (size 1)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "subs tmp, r1, r2")
  (forbidden-opcodes ("cmp")))

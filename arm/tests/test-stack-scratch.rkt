@@ -6,7 +6,8 @@
          "../arm-printer.rkt"
          "../arm-simulator-racket.rkt"
          "../arm-simulator-rosette.rkt"
-         "../arm-validator.rkt")
+         "../arm-validator.rkt"
+         "../../inst.rkt")
 
 (current-bitwidth 32)
 
@@ -113,6 +114,24 @@
  (check-equal? (vector-ref map-back (list-ref remapped 0)) 12)
  (check-equal? (list-ref remapped 1) 32)
  (check-equal? (list-ref remapped 2) 'downwards))
+
+(test-case
+ "ARM compression preserves r15 as the PC register"
+ (define machine (new arm-machine%))
+ (define printer (new arm-printer% [machine machine]))
+ (define-values (compressed _live map-back config)
+   (send printer compress-state-space
+         (send parser ir-from-string
+               "add r1, r1, r0
+eor r4, r4, r5
+add r2, r2, r15
+add r3, r3, r0
+eor r6, r6, r7
+")
+         '(2)))
+ (check-true (> config 15))
+ (check-equal? (vector-ref map-back 15) 15)
+ (check-equal? (vector-ref (inst-args (vector-ref compressed 2)) 2) "r15"))
 
 (test-case
  "Rosette validator memory comparison ignores candidate-only stack scratch writes"

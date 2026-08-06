@@ -4,5 +4,7 @@
  (size 2)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "mov tmp, #4; ldr r0, [r1, tmp]")
  (forbidden-opcodes ()))

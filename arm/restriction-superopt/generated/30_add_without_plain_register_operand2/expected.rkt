@@ -4,5 +4,7 @@
  (size 3)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "shifted-register or materialized-register workaround if one exists")
  (forbidden-opcodes ()))

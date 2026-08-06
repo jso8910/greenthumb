@@ -6,6 +6,7 @@
          racket/match
          racket/runtime-path
          "../../inst.rkt"
+         "../arm-block-lowering.rkt"
          "../arm-machine.rkt"
          "../arm-parser.rkt"
          "../arm-printer.rkt"
@@ -77,6 +78,7 @@
 (define workers (make-parameter 4))
 (define post-correct-time (make-parameter 20))
 (define post-correct-remaining-frac (make-parameter 1/4))
+(define selected-case-spec (make-parameter #f))
 (define output-root
   (make-parameter (build-path greenthumb-root "arm/restriction-superopt/output")))
 (define generated-root
@@ -96,10 +98,11 @@
  [("-n" "--size") size "Override per-case candidate size." (candidate-size (string->number size))]
  [("-c" "--workers") count "Worker count; values below 4 are rejected." (workers (string->number count))]
  [("--no-two-phase-stop") "Disable post-correct early stopping." (post-correct-time #f) (post-correct-remaining-frac #f)]
- [("--post-correct-time") seconds "Seconds to keep improving after the first correct program." (post-correct-time (parse-nonnegative-number 'post-correct-time seconds))]
- [("--post-correct-remaining-frac" "--post-correct-frac") frac "Fraction of remaining timeout to keep improving after the first correct program." (post-correct-remaining-frac (parse-nonnegative-number 'post-correct-remaining-frac frac))]
- [("-o" "--output-root") dir "GreenThumb optimizer output root." (output-root dir)]
- [("--generated-root") dir "Generated case root." (generated-root dir)])
+	 [("--post-correct-time") seconds "Seconds to keep improving after the first correct program." (post-correct-time (parse-nonnegative-number 'post-correct-time seconds))]
+	 [("--post-correct-remaining-frac" "--post-correct-frac") frac "Fraction of remaining timeout to keep improving after the first correct program." (post-correct-remaining-frac (parse-nonnegative-number 'post-correct-remaining-frac frac))]
+	 [("--cases") spec "Run only one-based case indexes/ranges, e.g. 1-3,6,10-12." (selected-case-spec spec)]
+	 [("-o" "--output-root") dir "GreenThumb optimizer output root." (output-root dir)]
+	 [("--generated-root") dir "Generated case root." (generated-root dir)])
 
 (when (< (workers) 4)
   (raise-user-error 'run-all "restriction superopt tests require at least 4 workers"))
@@ -114,25 +117,75 @@
   #:transparent)
 
 (define (case-directories)
-  (sort
-   (filter directory-exists? (directory-list (generated-root) #:build? #t))
-   string<?
-   #:key path->string))
+  (define all-cases
+    (sort
+     (filter directory-exists? (directory-list (generated-root) #:build? #t))
+     string<?
+     #:key path->string))
+  (define selected (and (selected-case-spec) (parse-case-selection (selected-case-spec))))
+  (if selected
+      (for/list ([case-dir all-cases]
+                 [index (in-naturals 1)]
+                 #:when (hash-has-key? selected index))
+        case-dir)
+      all-cases))
+
+(define (parse-positive-integer who value)
+  (define parsed (string->number value))
+  (unless (and (exact-integer? parsed) (> parsed 0))
+          (raise-user-error who "expected a positive integer, got ~a" value))
+  parsed)
+
+(define (parse-case-selection spec)
+  (define selected (make-hash))
+  (for ([raw-part (string-split spec ",")])
+    (define part (string-trim raw-part))
+    (unless (positive? (string-length part))
+            (raise-user-error 'cases "empty case selection in ~a" spec))
+    (match (string-split part "-")
+      [(list one)
+       (hash-set! selected (parse-positive-integer 'cases one) #t)]
+      [(list start end)
+       (define lo (parse-positive-integer 'cases start))
+       (define hi (parse-positive-integer 'cases end))
+       (when (> lo hi)
+             (raise-user-error 'cases "range start must be <= end, got ~a" part))
+       (for ([index (in-range lo (add1 hi))])
+         (hash-set! selected index #t))]
+      [_
+       (raise-user-error 'cases "bad case selection part ~a in ~a" part spec)]))
+  selected)
 
 (define (read-metadata case-dir)
   (call-with-input-file (build-path case-dir "expected.rkt") read))
 
 (define (read-best-info output-dir)
-  (define info-file (build-path output-dir "best.info"))
-  (if (file-exists? info-file)
-      (with-handlers ([exn? (lambda (e) (values #f #f #f))])
-        (call-with-input-file info-file
-          (lambda (in)
-            (define cost (string->number (read-line in)))
-            (define len (string->number (read-line in)))
-            (define best-time (read-line in))
-            (values cost len best-time))))
-      (values #f #f #f)))
+  (define (parse-info-file info-file)
+    (with-handlers ([exn? (lambda (e) #f)])
+      (call-with-input-file info-file
+        (lambda (in)
+          (define cost (string->number (read-line in)))
+          (define len (string->number (read-line in)))
+          (define best-time (read-line in))
+          (and cost len (list cost len best-time))))))
+  (define info-files
+    (cond
+      [(not (directory-exists? output-dir)) '()]
+      [(file-exists? (build-path output-dir "best.info"))
+       (list (build-path output-dir "best.info"))]
+      [else
+       (find-files (lambda (path)
+                     (equal? (path->string (file-name-from-path path)) "best.info"))
+                   output-dir)]))
+  (define infos (filter identity (map parse-info-file info-files)))
+  (if (empty? infos)
+      (values #f #f #f)
+      (let ([best (argmin first infos)])
+        (values (first best) (second best) (third best)))))
+
+(define (discovered-best? output-dir)
+  (define-values (cost len time) (read-best-info output-dir))
+  (and cost len time #t))
 
 (define (parse-stat-file file)
   (with-handlers ([exn? (lambda (e) (hash))])
@@ -216,10 +269,16 @@
   (and stack-scratch
        (let* ([op (vector-ref (inst-op my-inst) 0)]
               [args (inst-args my-inst)])
-         (and (member op '("str" "strb" "strh"))
-              (= (vector-length args) 3)
-              (let ([base-reg (parse-reg-id (vector-ref args 1))]
-                    [offset (parse-number (vector-ref args 2))]
+         (and (member op '("str" "strb" "strh" "str-full" "strb-full" "strh-full"))
+              (or (= (vector-length args) 3)
+                  (and (= (vector-length args) 6)
+                       (equal? (vector-ref args 3) "1")
+                       (equal? (vector-ref args 5) "0")))
+              (let* ([base-reg (parse-reg-id (vector-ref args 1))]
+                     [raw-offset (parse-number (vector-ref args 2))]
+                     [up? (or (= (vector-length args) 3)
+                              (equal? (vector-ref args 4) "1"))]
+                     [offset (and raw-offset (if up? raw-offset (- raw-offset)))]
                     [sp-reg (first stack-scratch)]
                     [stack-size (second stack-scratch)]
                     [direction (third stack-scratch)])
@@ -230,9 +289,9 @@
 (define (memory-writing-inst? my-inst stack-scratch)
   (define op (vector-ref (inst-op my-inst) 0))
   (cond
-    [(member op '("str" "strb" "strh"))
+    [(member op '("str" "strb" "strh" "str-full" "strb-full" "strh-full"))
      (not (stack-scratch-only-store? my-inst stack-scratch))]
-    [(member op '("stm" "swp" "swpb")) #t]
+    [(member op '("stm" "stm-full" "swp" "swpb")) #t]
     [else #f]))
 
 (define (augment-live-out code live-out stack-scratch)
@@ -274,8 +333,9 @@
   (define parser (new arm-parser%))
   (define printer (new arm-printer% [machine machine]))
   (define simulator (new arm-simulator-racket% [machine machine]))
-  (define original-source (send parser ir-from-file input-file))
   (define live-out-source (send parser info-from-file info-file))
+  (define original-source
+    (lower-block-transfers (send parser ir-from-file input-file) live-out-source))
   (define original (send printer encode original-source))
   (define candidate (send printer encode (send parser ir-from-file best-file)))
   (define constraint
@@ -313,6 +373,7 @@
 (define (run-case case-dir)
   (define metadata (read-metadata case-dir))
   (define hard? (metadata-ref metadata 'hard #f))
+  (define require-discovered? (metadata-ref metadata 'require-discovered #f))
   (define name (metadata-ref metadata 'name (path->string (file-name-from-path case-dir))))
   (define started-at (current-seconds))
   (define (finish status optimizer-ok? case-output message)
@@ -344,6 +405,17 @@
      (let* ([case-output (build-path (output-root) name)]
             [timeout (or (timeout-seconds) (metadata-ref metadata 'timeout 60))]
             [size (or (candidate-size) (metadata-ref metadata 'size 3))]
+            [mode-name (metadata-ref metadata 'mode "syn")]
+            [mode-arg
+             (match mode-name
+               ["opt" "--optimize"]
+               ["optimize" "--optimize"]
+               ["syn" "--synthesize"]
+               ["synthesize" "--synthesize"]
+               [_ (raise-user-error 'run-all
+                                    "unknown optimizer mode ~a for case ~a"
+                                    mode-name
+                                    name)])]
             [stack-scratch (metadata-ref metadata 'stack-scratch #f)]
             [optimizer-file (greenthumb-relative-string optimizer-path)]
             [case-output-arg (greenthumb-relative-string case-output)]
@@ -369,7 +441,7 @@
             [args
              (append
               (list optimizer-file
-                    "--stoch" "-s" "--solver" "z3"
+                    "--stoch" mode-arg "--solver" "z3"
                     "-c" (number->string (workers))
                     "-t" (number->string timeout)
                     "-n" (number->string size)
@@ -396,6 +468,12 @@
               (let ([best-file (build-path case-output "best.s")])
                 (unless (file-exists? best-file)
                   (raise-user-error 'run-all "optimizer produced no best.s for case ~a" name))
+                (when (and require-discovered?
+                           (not (discovered-best? case-output)))
+                      (raise-user-error
+                       'run-all
+                       "case ~a requires a discovered candidate, but optimizer only produced fallback output"
+                       name))
                 (assert-no-branches! best-file)
                 (assert-program-allowed! best-file (build-path case-dir "restrict.rkt"))
                 (assert-forbidden-opcodes! best-file metadata)

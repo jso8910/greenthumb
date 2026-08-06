@@ -6,6 +6,7 @@
          "../arm-simulator-racket.rkt"
          "../arm-validator.rkt"
          "../arm-symbolic.rkt"
+         "../../inst.rkt"
          "../../memory-rosette.rkt"
          )
 
@@ -16,6 +17,32 @@
 (define simulator-racket (new arm-simulator-racket% [machine machine]))
 (define simulator-rosette (new arm-simulator-rosette% [machine machine]))
 (define validator (new arm-validator% [machine machine] [simulator simulator-rosette]))
+
+(define pc-machine (new arm-machine% [config 16]))
+(define pc-simulator-racket (new arm-simulator-racket% [machine pc-machine]))
+(define pc-simulator-rosette (new arm-simulator-rosette% [machine pc-machine]))
+(define (pc-mk op cond shf args)
+  (inst (send pc-machine get-opcode-id (vector op cond shf))
+        (list->vector args)))
+(define pc-code
+  (vector
+   (pc-mk 'add '|| '|| '(1 1 0))
+   (pc-mk 'add '|| '|| '(2 2 15))))
+(define pc-state
+  (progstate (vector 5 10 20 0 0 0 0 0 0 0 0 0 0 0 0 1000)
+             #f
+             0))
+(define pc-output-racket (send pc-simulator-racket interpret pc-code pc-state))
+(define pc-output-rosette (send pc-simulator-rosette interpret pc-code pc-state))
+(define pc-regs-racket (progstate-regs pc-output-racket))
+(define pc-regs-rosette (progstate-regs pc-output-rosette))
+(unless (= (vector-ref pc-regs-racket 2) (vector-ref pc-regs-rosette 2))
+  (raise "Racket/Rosette PC-read outputs differ"))
+(unless (= (vector-ref pc-regs-racket 2) 1024)
+  (raise "PC read did not include instruction-index offset"))
+(unless (and (= (vector-ref pc-regs-racket 15) 1000)
+             (= (vector-ref pc-regs-rosette 15) 1000))
+  (raise "PC base register was mutated"))
 
 (define (func-rand #:min [min #f] #:max [max #f] #:const [const #f])
   (if const const (random 10)))
@@ -90,5 +117,3 @@ orr r0, r0, r1, asr 31
 (define output-state-sym
   (send simulator-rosette interpret encoded-code input-state-sym))
 (send machine display-state output-state-sym)|#
-
-

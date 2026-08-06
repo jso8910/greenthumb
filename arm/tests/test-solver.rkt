@@ -13,7 +13,8 @@
 (define printer (new arm-printer% [machine machine]))
 (define simulator-rosette (new arm-simulator-rosette% [machine machine]))
 (define validator (new arm-validator% [machine machine] [printer printer]
-                       [simulator simulator-rosette]))
+                       [simulator simulator-rosette]
+                       [solver-name 'z3]))
 
 (define code
 (send parser ir-from-string "

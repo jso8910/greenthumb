@@ -4,5 +4,7 @@
  (size 2)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "str r0, [r1,#0]; str r2, [r1,#4]")
  (forbidden-opcodes ("stm" "ldm")))

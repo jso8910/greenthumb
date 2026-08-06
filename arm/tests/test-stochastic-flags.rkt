@@ -1,11 +1,16 @@
 #lang racket
 
 (require rackunit
+         racket/file
+         racket/list
+         racket/runtime-path
          "../../inst.rkt"
          "../arm-parser.rkt"
          "../arm-machine.rkt"
          "../arm-printer.rkt"
          "../arm-stochastic.rkt")
+
+(define-runtime-path arm-simulator-racket "../arm-simulator-racket.rkt")
 
 (define machine (new arm-machine% [config 4]))
 (define parser (new arm-parser%))
@@ -89,3 +94,67 @@
 (check-true
  (for/or ([opcode-id cmp-pool])
    (equal? (base-opcode-name opcode-id) 'subs)))
+
+(define (sorted-symbols xs)
+  (sort (remove-duplicates xs) symbol<?))
+
+(define (machine-base-opcode-names machine)
+  (sorted-symbols (vector->list (vector-ref (get-field opcodes machine) 0))))
+
+(define (simulator-base-opcode-names)
+  (sorted-symbols
+   (map (lambda (match)
+          (string->symbol (substring match 1)))
+        (regexp-match* #rx"`[a-z0-9#-]+"
+                       (file->string arm-simulator-racket)))))
+
+(define candidate-machine (new arm-machine% [config 5]))
+(define candidate-printer (new arm-printer% [machine candidate-machine]))
+(define candidate-stochastic
+  (new arm-stochastic%
+       [machine candidate-machine]
+       [printer candidate-printer]
+       [validator #f]
+       [simulator #f]
+       [syn-mode #t]))
+
+(define machine-opcodes (machine-base-opcode-names candidate-machine))
+(define simulator-opcodes (simulator-base-opcode-names))
+
+(check-equal? (remove* machine-opcodes simulator-opcodes) '())
+(check-equal? (remove* simulator-opcodes machine-opcodes) '())
+
+(send candidate-machine reset-opcode-pool)
+(send candidate-machine reset-arg-ranges)
+
+(define all-live
+  (progstate (make-vector 5 #t) #t #t #t #t #t))
+
+(parameterize ([current-output-port (open-output-string)])
+  (send candidate-machine analyze-args
+        (vector)
+        (vector)
+        (vector)
+        all-live
+        all-live))
+(send candidate-machine analyze-opcode (vector) (vector) (vector))
+
+(define candidate-pool-names
+  (sorted-symbols
+   (map (lambda (opcode-id)
+          (send candidate-machine get-base-opcode-name (vector-ref opcode-id 0)))
+        (get-field opcode-pool candidate-machine))))
+
+(check-equal? (remove* candidate-pool-names machine-opcodes)
+              '(ldm-full# stm-full#))
+
+(define stochastic-generation-failures
+  (for/list ([opcode-id (get-field opcode-pool candidate-machine)]
+             #:unless
+             (with-handlers ([exn:fail? (lambda (e) #f)]
+                             [string? (lambda (e) #f)])
+               (send candidate-stochastic random-instruction
+                     0 1 all-live opcode-id)))
+    (send candidate-machine get-opcode-name opcode-id)))
+
+(check-equal? stochastic-generation-failures '())

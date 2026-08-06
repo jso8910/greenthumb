@@ -4,5 +4,7 @@
  (size 3)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "ldrb tmp, [r1]; strb r2, [r1]; mov r0, tmp")
  (forbidden-opcodes ("swp" "swpb")))

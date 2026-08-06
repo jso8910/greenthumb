@@ -33,12 +33,144 @@
 
       (define args-list (vector->list args))
       (define len (length args-list))
+      (define (string-suffix? s suffix)
+        (let ([s-len (string-length s)]
+              [suffix-len (string-length suffix)])
+          (and (>= s-len suffix-len)
+               (equal? (substring s (- s-len suffix-len)) suffix))))
+      (define (string-prefix? s prefix)
+        (let ([s-len (string-length s)]
+              [prefix-len (string-length prefix)])
+          (and (>= s-len prefix-len)
+               (equal? (substring s 0 prefix-len) prefix))))
+      (define (reg? s)
+        (and (string? s)
+             (or (equal? s "fp")
+                 (and (> (string-length s) 1)
+                      (equal? (substring s 0 1) "r")))))
+      (define (bool-one? s)
+        (or (equal? s "1") (equal? s 1)))
+      (define (imm-arg s)
+        (if (and (string? s) (not (string-prefix? s "#")))
+            (string-append "#" s)
+            s))
+      (define (strip-full-op s)
+        (let* ([without-imm (if (string-suffix? s "#")
+                                (substring s 0 (sub1 (string-length s)))
+                                s)]
+               [without-full (regexp-replace #rx"-full$" without-imm "")])
+          without-full))
+      (define (signed-offset offset up?)
+        (if up?
+            (imm-arg offset)
+            (imm-arg (string-append "-" offset))))
+      (define (reg-offset offset up? shfop shfarg)
+        (define base (if up? offset (string-append "-" offset)))
+        (cond
+          [(and (equal? shfop "ror") (equal? shfarg "0"))
+           (format "~a, rrx" base)]
+          [(and shfop
+                (not (equal? shfop ""))
+                (not (equal? shfop "||"))
+                shfarg
+                (not (and (equal? shfop "lsl") (equal? shfarg "0"))))
+           (format "~a, ~a #~a" base shfop shfarg)]
+          [else base]))
+      (define (transfer-addr rn offset p u w register-offset?)
+        (define offset-text
+          (if register-offset?
+              (reg-offset offset u shfop (and (> len 6) (list-ref args-list 6)))
+              (signed-offset offset u)))
+        (cond
+          [p
+           (format "[~a, ~a]~a" rn offset-text (if w "!" ""))]
+          [else
+           (format "[~a], ~a" rn offset-text)]))
+      (define (reglist-text mask)
+        (define parsed-mask (if (number? mask) mask (string->number mask)))
+        (format "{~a}"
+                (string-join
+                 (for/list ([i (in-range 16)]
+                            #:when (= (bitwise-bit-field parsed-mask i (add1 i)) 1))
+                   (format "r~a" i))
+                 ", ")))
+      (define (block-suffix p u)
+        (cond
+          [(and p u) "ib"]
+          [(and p (not u)) "db"]
+          [(and (not p) u) "ia"]
+          [else "da"]))
+      (define (full-transfer-op? s)
+        (regexp-match? #rx"^(ldr|ldrb|ldrh|ldrsb|ldrsh|str|strb|strh)-full#?$" s))
+      (define (block-transfer-op? s)
+        (regexp-match? #rx"^(ldm|stm)-full#?$" s))
+      (define (simple-transfer-op? s)
+        (member s '("ldr" "ldrb" "ldrh" "ldrsb" "ldrsh" "str" "strb" "strh")))
+      (define (simple-transfer-addr rn offset)
+        (format "[~a, ~a]" rn (if (reg? offset) offset (imm-arg offset))))
+      (define (dp-immediate-op? s)
+        (member s '("add" "adc" "sub" "rsb" "sbc" "rsc" "and" "orr" "eor" "bic" "orn"
+                    "adds" "adcs" "subs" "rsbs" "sbcs" "rscs" "ands" "orrs" "eors" "bics"
+                    "mov" "mvn" "movs" "mvns" "tst" "teq" "cmp" "cmn")))
       (cond
        [(equal? op "nop") (display "nop")]
+       [(member op '("swp" "swpb"))
+        (display (format "~a~a~a ~a, ~a, [~a]"
+                         indent op (vector-ref ops-vec 1)
+                         (list-ref args-list 0)
+                         (list-ref args-list 1)
+                         (list-ref args-list 2)))]
+       [(full-transfer-op? op)
+        (define register-offset? (and (>= len 6) (reg? (list-ref args-list 2))))
+        (define p (bool-one? (list-ref args-list 3)))
+        (define w (bool-one? (list-ref args-list 5)))
+        (define mnemonic (format "~a~a~a"
+                                 (strip-full-op op)
+                                 (if (and (not p) w) "t" "")
+                                 (vector-ref ops-vec 1)))
+        (define addr (transfer-addr (list-ref args-list 1)
+                                    (list-ref args-list 2)
+                                    p
+                                    (bool-one? (list-ref args-list 4))
+                                    w
+                                    register-offset?))
+        (display (format "~a~a ~a, ~a" indent mnemonic (list-ref args-list 0) addr))]
+       [(block-transfer-op? op)
+        (define p (bool-one? (list-ref args-list 2)))
+        (define u (bool-one? (list-ref args-list 3)))
+        (define w (bool-one? (list-ref args-list 4)))
+        (define mnemonic (format "~a~a~a"
+                                 (substring op 0 3)
+                                 (block-suffix p u)
+                                 (vector-ref ops-vec 1)))
+        (display (format "~a~a ~a~a, ~a"
+                         indent
+                         mnemonic
+                         (list-ref args-list 0)
+                         (if w "!" "")
+                         (reglist-text (list-ref args-list 1))))]
+       [(and (simple-transfer-op? op) (= len 3))
+        (display (format "~a~a~a ~a, ~a"
+                         indent
+                         op
+                         (vector-ref ops-vec 1)
+                         (list-ref args-list 0)
+                         (simple-transfer-addr (list-ref args-list 1)
+                                               (list-ref args-list 2))))]
        [(and shfop (not (equal? shfop "")))
         (display (format "~a~a~a ~a" indent op (vector-ref ops-vec 1)
                          (string-join (take args-list (sub1 len)) ", ")))
-        (display (format ", ~a ~a" shfop (last args-list)))]
+        (if (and (equal? shfop "ror") (equal? (last args-list) "0"))
+            (display ", rrx")
+            (display (format ", ~a ~a" shfop
+                             (if (reg? (last args-list))
+                                 (last args-list)
+                                 (imm-arg (last args-list))))))]
+       [(and (dp-immediate-op? op) (> len 0) (not (reg? (last args-list))))
+        (display (format "~a~a~a ~a" indent op (vector-ref ops-vec 1)
+                         (string-join (append (take args-list (sub1 len))
+                                              (list (imm-arg (last args-list))))
+                                      ", ")))]
        [else 
         (display (format "~a~a~a ~a" indent op (vector-ref ops-vec 1)
                          (string-join args-list ", ")))])
@@ -54,6 +186,8 @@
         (string->number (substring name 1))]
 
        [(equal? name "fp") "fp"]
+
+       [(regexp-match? #rx"," name) name]
        
        [else 
         (raise (format "encode: name->id: undefined for ~a" name))]))
@@ -182,6 +316,12 @@
       (for ([x program]) (inner-collect-reglist x))
       (for ([live live-out])
            (when (number? live) (collect-reg-id! live)))
+
+      ;; The ARM simulators model r15 specially as the symbolic PC base.
+      ;; Keep it at compressed register id 15 so PC reads survive compression.
+      (when (set-member? reg-set 15)
+            (for ([reg-id (in-range 15)])
+                 (collect-reg-id! reg-id)))
 
       (define stack-config (send machine get-stack-scratch-config))
       (when stack-config

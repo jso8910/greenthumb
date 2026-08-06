@@ -4,5 +4,7 @@
  (size 2)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "register-shifted-register operand2 form or shifted temporary")
  (forbidden-opcodes ()))

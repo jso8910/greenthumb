@@ -4,5 +4,7 @@
  (size 3)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "mvnpl tmp, r2; addpl r0, r1, tmp; addpl r0, r0, #1")
  (forbidden-opcodes ("sub" "rsb" "sbc" "rsc" "cmp")))

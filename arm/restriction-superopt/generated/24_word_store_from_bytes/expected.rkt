@@ -4,5 +4,7 @@
  (size 8)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "four strb operations with shifts to write each byte")
  (forbidden-opcodes ("str")))

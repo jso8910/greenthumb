@@ -135,17 +135,33 @@
                         (ushr32 v (- 32 amount))))))
 
 (define (encode-modified-immediate value)
-  (define v (u32 value))
-  (define symbolic? (term? v))
-  (let loop ([rot 0])
-    (cond
-      [(= rot 16) (and symbolic? 0)]
-      [else
-       (define rotated (rol32 v (* 2 rot)))
-       (define fits? (= (bitwise-and rotated #xffffff00) 0))
-       (define encoded (bitwise-ior (arithmetic-shift rot 8)
-	                                    (bitwise-and rotated #xff)))
-	       (if fits? encoded (loop (add1 rot)))])))
+  (cond
+    [(string? value)
+     (define parts (map string-trim (string-split value ",")))
+     (cond
+       [(= (length parts) 2)
+        (define imm8 (string->number (first parts)))
+        (define rotate (string->number (second parts)))
+        (and imm8 rotate
+             (>= imm8 0)
+             (< imm8 256)
+             (>= rotate 0)
+             (< rotate 32)
+             (= (modulo rotate 2) 0)
+             (bitwise-ior (arithmetic-shift (/ rotate 2) 8) imm8))]
+       [else (encode-modified-immediate (string->number value))])]
+    [else
+     (define v (u32 value))
+     (define symbolic? (term? v))
+     (let loop ([rot 0])
+       (cond
+         [(= rot 16) (and symbolic? 0)]
+         [else
+          (define rotated (rol32 v (* 2 rot)))
+          (define fits? (= (bitwise-and rotated #xffffff00) 0))
+          (define encoded (bitwise-ior (arithmetic-shift rot 8)
+	                               (bitwise-and rotated #xff)))
+	  (if fits? encoded (loop (add1 rot)))]))]))
 
 (define (map-reg machine reg)
   (define reg-map (send machine get-restriction-reg-map))

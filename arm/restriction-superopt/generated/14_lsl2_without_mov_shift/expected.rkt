@@ -4,5 +4,7 @@
  (size 2)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "add tmp, r1, r1; add r0, tmp, tmp")
  (forbidden-opcodes ("lsl")))

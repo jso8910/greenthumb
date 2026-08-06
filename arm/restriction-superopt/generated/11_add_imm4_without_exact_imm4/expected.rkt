@@ -4,5 +4,7 @@
  (size 2)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "split immediate sequence such as #1 plus #3")
  (forbidden-opcodes ()))

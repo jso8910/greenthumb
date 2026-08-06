@@ -4,5 +4,7 @@
  (size 8)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "four ldrb operations plus shifts and orr to rebuild r0")
  (forbidden-opcodes ("ldr")))

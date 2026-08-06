@@ -4,5 +4,7 @@
  (size 2)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "mvn tmp, r2; and r0, r1, tmp")
  (forbidden-opcodes ("bic")))

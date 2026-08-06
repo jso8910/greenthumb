@@ -3351,5 +3351,5 @@
  (allow "xxx0100xx0x1xxx00xxxxxxxxxxxx1xx")
  (allow "xxx0100xx0x1xxx00xxxxxxxxxxxxx1x")
  (allow "xxx0100xx0x1xxx00xxxxxxxxxxxxxx1")
- (deny "xxxx00x1011xxxxxxxxxxxxxxxxxxxxx")
+ (deny "xxxx100xxxx1xxxxxxxxxxxxxxxxxxxx")
 )

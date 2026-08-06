@@ -4,5 +4,7 @@
  (size 3)
  (workers 4)
  (stack-scratch (12 32 downwards))
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "original store, with any extra memory writes confined to r12 downward scratch")
  (forbidden-opcodes ("b" "bl" "bx")))

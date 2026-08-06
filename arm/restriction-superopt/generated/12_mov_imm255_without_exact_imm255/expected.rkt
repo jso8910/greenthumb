@@ -4,5 +4,7 @@
  (size 2)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "nearby constant construction such as #256 minus #1")
  (forbidden-opcodes ()))

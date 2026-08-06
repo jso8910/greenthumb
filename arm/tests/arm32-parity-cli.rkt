@@ -3,12 +3,16 @@
 (require racket/format
          racket/match
          "../arm-machine.rkt"
+         "../arm-parser.rkt"
+         "../arm-printer.rkt"
          "../arm-restrictions.rkt"
          "../arm-simulator-racket.rkt"
          "../../inst.rkt")
 
 (define machine (new arm-machine% [config 16]))
 (define simulator (new arm-simulator-racket% [machine machine]))
+(define parser (new arm-parser%))
+(define printer (new arm-printer% [machine machine]))
 
 (define (parse-symbol value)
   (if (equal? value "||") '|| (string->symbol value)))
@@ -31,6 +35,111 @@
 
 (define (encode-line op cond shf args)
   (displayln (hex32 (arm-inst->word machine (mk op cond shf args)))))
+
+(define (encoded-inst-result encoded-inst)
+  (define word (arm-inst->word machine encoded-inst))
+  (if word
+      (format "ok ~a" (hex32 word))
+      "err encoder returned #f"))
+
+(define (parse-asm-result line)
+  (with-handlers ([exn? (lambda (e)
+                          (format "err ~a" (string-replace (exn-message e) "\n" "\\n")))])
+    (define code (send printer encode (send parser ir-from-string (string-append line "\n"))))
+    (cond
+      [(not (= (vector-length code) 1))
+       (format "err expected one instruction, got ~a" (vector-length code))]
+      [else
+       (encoded-inst-result (vector-ref code 0))])))
+
+(define (parse-asm-results lines)
+  (define fallback-threshold 1)
+  (define (fallback)
+    (cond
+      [(<= (length lines) fallback-threshold)
+       (map parse-asm-result lines)]
+      [else
+       (define mid (quotient (length lines) 2))
+       (append (parse-asm-results (take lines mid))
+               (parse-asm-results (drop lines mid)))]))
+  (cond
+    [(null? lines) '()]
+    [else
+     (with-handlers ([exn? (lambda (_) (fallback))])
+       (define code
+         (send printer encode
+               (send parser ir-from-string
+                     (string-append (string-join lines "\n") "\n"))))
+       (if (= (vector-length code) (length lines))
+           (for/list ([encoded-inst (in-vector code)])
+             (with-handlers ([exn? (lambda (e)
+                                     (format "err ~a" (string-replace (exn-message e) "\n" "\\n")))])
+               (encoded-inst-result encoded-inst)))
+           (fallback)))]))
+
+(define (parse-asm-line line)
+  (displayln (parse-asm-result line)))
+
+(define (print-encoded-result op cond shf args)
+  (with-handlers ([exn? (lambda (e)
+                          (format "err ~a" (string-replace (exn-message e) "\n" "\\n")))])
+    (define decoded-inst (send printer decode-inst (mk op cond shf args)))
+    (define line
+      (string-trim
+       (with-output-to-string
+         (lambda () (send printer print-syntax-inst decoded-inst)))))
+    (format "ok ~a" line)))
+
+(define (display-print-encoded-result op cond shf args)
+  (with-handlers ([exn? (lambda (e)
+                          (displayln
+                           (format "err ~a" (string-replace (exn-message e) "\n" "\\n"))))])
+    (define decoded-inst (send printer decode-inst (mk op cond shf args)))
+    (display "ok ")
+    (send printer print-syntax-inst decoded-inst)))
+
+(define (print-encoded-line op cond shf args)
+  (display-print-encoded-result op cond shf args))
+
+(define (parse-asm-batch)
+  (for ([result (parse-asm-results (sequence->list (in-lines)))])
+    (displayln result)))
+
+(define (print-encoded-batch)
+  (for ([line (in-lines)])
+    (define parts (string-split line "\t" #:trim? #f))
+    (match parts
+	      [(list op cond shf args ...)
+	       (display-print-encoded-result (parse-symbol op)
+	                                     (parse-symbol cond)
+	                                     (parse-symbol shf)
+	                                     (map parse-arg args))]
+      [_
+       (displayln "err expected tab-separated op cond shf args...")])))
+
+(define (surface-batch)
+  (define pending-parse-lines '())
+  (define (flush-parse!)
+    (when (pair? pending-parse-lines)
+      (for ([result (parse-asm-results (reverse pending-parse-lines))])
+        (displayln result))
+      (set! pending-parse-lines '())))
+  (for ([line (in-lines)])
+    (define parts (string-split line "\t" #:trim? #f))
+    (match parts
+      [(list "parse" asm-parts ...)
+       (set! pending-parse-lines
+             (cons (string-join asm-parts "\t") pending-parse-lines))]
+	      [(list "print" op cond shf args ...)
+	       (flush-parse!)
+	       (display-print-encoded-result (parse-symbol op)
+	                                     (parse-symbol cond)
+	                                     (parse-symbol shf)
+	                                     (map parse-arg args))]
+      [_
+       (flush-parse!)
+       (displayln "err expected tab-separated parse/print request")]))
+  (flush-parse!))
 
 (define samples
   (list
@@ -82,7 +191,27 @@
       (progstate (vector 11 22 33 100 0 0 0 0 0 0 0 0 0 0 0 1000)
                  (progstate-memory (base-state))
                  0)
-      '((reg 3) (mem 92) (mem 96))))))
+      '((reg 3) (mem 92) (mem 96))))
+   "pc_read_after_independent_add"
+   (lambda ()
+     (values
+      (vector
+       (mk 'add '|| '|| '(1 1 0))
+       (mk 'add '|| '|| '(2 2 15)))
+      (progstate (vector 5 10 20 0 0 0 0 0 0 0 0 0 0 0 0 1000)
+                 (progstate-memory (base-state))
+                 0)
+      '((reg 2))))
+   "pc_read_before_independent_add"
+   (lambda ()
+     (values
+      (vector
+       (mk 'add '|| '|| '(2 2 15))
+       (mk 'add '|| '|| '(1 1 0)))
+      (progstate (vector 5 10 20 0 0 0 0 0 0 0 0 0 0 0 0 1000)
+                 (progstate-memory (base-state))
+                 0)
+      '((reg 2))))))
 
 (define (emit-samples)
   (for ([sample samples])
@@ -108,10 +237,23 @@
                 (parse-symbol cond)
                 (parse-symbol shf)
                 (map parse-arg args))]
+  [(vector "parse-asm" line)
+   (parse-asm-line line)]
+  [(vector "parse-asm-batch")
+   (parse-asm-batch)]
+  [(vector "print-encoded" op cond shf args ...)
+   (print-encoded-line (parse-symbol op)
+                       (parse-symbol cond)
+                       (parse-symbol shf)
+                       (map parse-arg args))]
+  [(vector "print-encoded-batch")
+   (print-encoded-batch)]
+  [(vector "surface-batch")
+   (surface-batch)]
   [(vector "samples")
    (emit-samples)]
   [(vector "run-sample" name)
    (run-semantic-sample name)]
   [_
    (raise-user-error 'arm32-parity-cli
-                     "usage: racket arm32-parity-cli.rkt encode <op> <cond> <shf> [args...] | samples | run-sample <name>")])
+                     "usage: racket arm32-parity-cli.rkt encode <op> <cond> <shf> [args...] | parse-asm <line> | parse-asm-batch | print-encoded <op> <cond> <shf> [args...] | print-encoded-batch | surface-batch | samples | run-sample <name>")])

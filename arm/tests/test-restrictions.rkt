@@ -127,7 +127,7 @@
      (define sub-output (send simulator interpret sub input))
      (define replacement-output (send simulator interpret replacement input))
      (check-equal? (vector-ref (progstate-regs replacement-output) 0)
-                   (vector-ref (progstate-regs sub-output) 0)))))
+	                   (vector-ref (progstate-regs sub-output) 0)))))
 
 (check-exn
  exn:fail?

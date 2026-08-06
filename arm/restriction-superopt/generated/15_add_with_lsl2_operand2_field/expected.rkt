@@ -4,5 +4,7 @@
  (size 2)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "same immediate-shifted operand2 form or equivalent")
  (forbidden-opcodes ()))

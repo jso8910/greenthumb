@@ -33,10 +33,16 @@
   (and stack-scratch-config
        (let* ([op (vector-ref (inst-op my-inst) 0)]
               [args (inst-args my-inst)])
-         (and (member op '("str" "strb" "strh"))
-              (= (vector-length args) 3)
-              (let ([base-reg (parse-reg-id (vector-ref args 1))]
-                    [offset (parse-number (vector-ref args 2))]
+         (and (member op '("str" "strb" "strh" "str-full" "strb-full" "strh-full"))
+              (or (= (vector-length args) 3)
+                  (and (= (vector-length args) 6)
+                       (equal? (vector-ref args 3) "1")
+                       (equal? (vector-ref args 5) "0")))
+              (let* ([base-reg (parse-reg-id (vector-ref args 1))]
+                     [raw-offset (parse-number (vector-ref args 2))]
+                     [up? (or (= (vector-length args) 3)
+                              (equal? (vector-ref args 4) "1"))]
+                     [offset (and raw-offset (if up? raw-offset (- raw-offset)))]
                     [sp-reg (list-ref stack-scratch-config 0)]
                     [stack-size (list-ref stack-scratch-config 1)]
                     [direction (list-ref stack-scratch-config 2)])
@@ -47,9 +53,9 @@
 (define (memory-writing-inst? my-inst stack-scratch-config)
   (define op (vector-ref (inst-op my-inst) 0))
   (cond
-   [(member op '("str" "strb" "strh"))
+   [(member op '("str" "strb" "strh" "str-full" "strb-full" "strh-full"))
     (not (stack-scratch-only-store? my-inst stack-scratch-config))]
-   [(member op '("stm" "swp" "swpb")) #t]
+   [(member op '("stm" "stm-full" "swp" "swpb")) #t]
    [else #f]))
 
 (define (augment-live-out code live-out stack-scratch-config)

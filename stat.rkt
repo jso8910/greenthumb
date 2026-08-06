@@ -34,6 +34,7 @@
                 [validate-time 0]
                 [mutate-time 0]
 		[dir #f]
+                [last-stat-time 0]
                 )
            
     (super-new)
@@ -49,9 +50,14 @@
       ;;   (thunk
       ;;    (pretty-display (format "~a,~a" iter-count current-cost))))
       (set! iter-count (add1 iter-count))
-      (and (= (modulo iter-count 30000) 0) ;;30000
+      (define now (- (current-seconds) start-time))
+      (when (or (= iter-count 1)
+                (>= (- now last-stat-time) 5)
+                (= (modulo iter-count 5000) 0))
+            (set! last-stat-time now)
+            (print-stat-to-file))
+      (and (= (modulo iter-count 5000) 0)
 	   (let-values ([(cost len time id) (get-best-info dir)])
-             (print-stat-to-file)
              (and cost len))))
 
     (define/public (inc-propose x)

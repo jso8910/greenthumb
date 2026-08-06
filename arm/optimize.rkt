@@ -1,6 +1,7 @@
 #lang racket
 
 (require "arm-parser.rkt"
+         "arm-block-lowering.rkt"
          "arm-machine.rkt"
          "arm-printer.rkt"
          "main.rkt"
@@ -147,8 +148,10 @@
 
 (define parser (new arm-parser%))
 (define stack-scratch-config (selected-stack-scratch-config))
-(define code (send parser ir-from-file file-to-optimize))
 (define live-out (send parser info-from-file (string-append file-to-optimize ".info")))
+(define code (lower-block-transfers
+              (send parser ir-from-file file-to-optimize)
+              live-out))
 
 (define optimized-code
   (optimize code

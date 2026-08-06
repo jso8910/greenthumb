@@ -4,5 +4,7 @@
  (size 2)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "addeq r0, r1, r2 or predicated equivalent")
  (forbidden-opcodes ("b" "bl" "bx")))

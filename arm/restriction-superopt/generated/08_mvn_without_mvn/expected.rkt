@@ -4,5 +4,7 @@
  (size 2)
  (workers 4)
  (stack-scratch #f)
+ (require-discovered #f)
+ (mode "syn")
  (expected-shape "eor r0, r1, #-1 or equivalent")
  (forbidden-opcodes ("mvn")))

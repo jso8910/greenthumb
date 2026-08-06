@@ -2,6 +2,7 @@
 
 (require "../arm-validator.rkt" "../arm-machine.rkt" "../arm-printer.rkt"
          "../arm-parser.rkt" "../../inst.rkt"
+         "../../solver-config.rkt"
          "../arm-simulator-rosette.rkt" 
          "../arm-simulator-racket.rkt"
          "../arm-symbolic.rkt" "../arm-stochastic.rkt" 
@@ -14,11 +15,13 @@
 (define printer (new arm-printer% [machine machine]))
 (define simulator-racket (new arm-simulator-racket% [machine machine]))
 (define simulator-rosette (new arm-simulator-rosette% [machine machine]))
-(define validator (new arm-validator% [machine machine] [simulator simulator-rosette]))
+(define validator (new arm-validator% [machine machine] [simulator simulator-rosette]
+                       [solver-name 'z3]))
 
 (define symbolic (new arm-symbolic% [machine machine] [printer printer]
                       [parser parser]
-                      [validator validator] [simulator simulator-rosette]))
+                      [validator validator] [simulator simulator-rosette]
+                      [solver-name 'z3]))
 (define stoch (new arm-stochastic% [machine machine] [printer printer]
                    [validator validator] [simulator simulator-racket]
                    [parser parser] [syn-mode #t]))
@@ -28,6 +31,8 @@
                       [inverse% arm-inverse%]
                       [enumerator% arm-enumerator%]
                       [syn-mode `partial1]))
+
+(set-current-solver! 'z3)
 
 (define prefix 
 (send parser ir-from-string "

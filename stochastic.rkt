@@ -47,9 +47,19 @@
                            #:assume [assumption (send machine no-assumption)]
                            #:input-file [input-file #f]
                            #:start-prog [start #f])
+      (send stat set-name name)
       (send machine reset-opcode-pool)
       (send machine reset-arg-ranges)
       (send validator adjust-memory-config spec)
+      (define early-seeded-best-correct? #f)
+      ;; In optimize mode the parallel driver supplies the current spec window
+      ;; as start.  Record it before expensive search setup so a valid
+      ;; optimize-mode seed is not mistaken for parent fallback output.
+      (when (and start
+                 (not syn-mode)
+                 (send machine program-allowed? start))
+            (send stat update-best-correct start (send simulator performance-cost start))
+            (set! early-seeded-best-correct? #t))
 
       ;; 1) User-provided live-in
       ;; (define live-in-user (send machine progstate->vector this-live-in))
@@ -121,12 +131,11 @@
             )
       (define spec-allowed? (send machine program-allowed? spec))
       (define seed-best-correct? (and (not syn-mode) spec-allowed?))
-      (set-field! best-correct-program stat (and seed-best-correct? spec))
-      (set-field! best-correct-cost stat
-                  (if seed-best-correct?
-                      (send simulator performance-cost spec)
-                      w-error))
-      (send stat set-name name)
+      (if (and seed-best-correct? (not early-seeded-best-correct?))
+          (send stat update-best-correct spec (send simulator performance-cost spec))
+          (unless early-seeded-best-correct?
+            (set-field! best-correct-program stat #f)
+            (set-field! best-correct-cost stat w-error)))
       (pretty-display (format ">>> Finish generating inputs outputs at ~a s."
                               (- (current-seconds) (get-field start-time stat))))
 

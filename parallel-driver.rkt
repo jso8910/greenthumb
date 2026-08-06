@@ -102,6 +102,10 @@
 	(set! dir-id (add1 dir-id))
         
         (define (create-file id search-type mode)
+          (define effective-start-prog
+            (or start-prog
+                (and (equal? mode `opt)
+                     (vector-copy code from to))))
           (define (req file)
             (format "(file \"~a/~a\")" srcpath (required-module file)))
           (define required-files
@@ -169,9 +173,9 @@
                (pretty-display (format "(define encoded-prefix (send printer encode prefix))"))
                (pretty-display (format "(define encoded-code (send printer encode code))"))
                (pretty-display (format "(define encoded-postfix (send printer encode postfix))"))
-               (when start-prog
+               (when effective-start-prog
                      (pretty-display "(define start-code (send parser ir-from-string \"")
-                     (send printer print-syntax start-prog)
+                     (send printer print-syntax effective-start-prog)
                      (pretty-display "\"))")
                      (pretty-display (format "(define encoded-start-code (send printer encode start-code))"))
                      )
@@ -181,7 +185,7 @@
                         path id time-limit prog-size 
                         (send printer output-assume-string assume)
                         (if input-file (string-append "\"" input-file "\"") #f)
-                        (if start-prog "encoded-start-code" #f)
+                        (if effective-start-prog "encoded-start-code" #f)
                         ))
                
                ;;(pretty-display "(dump-memory-stats)"

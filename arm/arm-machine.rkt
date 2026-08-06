@@ -552,11 +552,15 @@
 	      #:required '(#t #f #t)
 	      #:args '((reg reg) () (bit)) #:ins '((0 1 c) (n z c v) (2)) #:outs '(n z c))
 
-	    (define-instruction-class 'cmpi '(cmp# cmn#)
-	      #:args '(reg const) #:ins '(0 1) #:outs '(n z c v))
+	    (define-instruction-class 'cmpi
+	      (list '(cmp# cmn#) cond-opcodes)
+	      #:required '(#t #f)
+	      #:args '((reg const) ()) #:ins '((0 1) (n z c v)) #:outs '(n z c v))
 
-	    (define-instruction-class 'testi '(tst# teq#)
-	      #:args '(reg const) #:ins '(0 1 c) #:outs '(n z c))
+	    (define-instruction-class 'testi
+	      (list '(tst# teq#) cond-opcodes)
+	      #:required '(#t #f)
+	      #:args '((reg const) ()) #:ins '((0 1 c) (n z c v)) #:outs '(n z c))
 
     (finalize-machine-description)
     
@@ -602,11 +606,7 @@
     ;; usefulness is a proposal-bias concern, not a hard reachability gate.
     (define/override (analyze-opcode prefix code postfix)
       (define unmodeled-rosette-opcodes
-        '(ldr-full# ldrb-full# ldrh-full# ldrsb-full# ldrsh-full#
-          str-full# strb-full# strh-full#
-          ldr-full ldrb-full ldrh-full ldrsb-full ldrsh-full
-          str-full strb-full strh-full
-          ldm-full# stm-full#))
+        '(ldm-full# stm-full#))
       (define modeled-opcodes
         (filter-not
          (lambda (opcode-name) (member opcode-name unmodeled-rosette-opcodes))
