@@ -7,9 +7,16 @@
 (provide (all-defined-out))
 
 (struct compiled-pattern (mask bits text) #:transparent)
-(struct arm-restrictions (default allow deny source) #:transparent)
+(struct pattern-index (buckets fallback) #:transparent)
+(struct arm-restrictions
+        (default allow deny source allow-index deny-index word-cache inst-cache)
+        #:transparent)
 
 (define arm-u32-mask #xffffffff)
+(define pattern-index-width 12)
+(define pattern-index-shift (- 32 pattern-index-width))
+(define pattern-index-size (arithmetic-shift 1 pattern-index-width))
+(define pattern-index-wildcard-limit 8)
 
 (define (compile-arm-pattern pattern)
   (unless (and (string? pattern) (= (string-length pattern) 32))
@@ -66,29 +73,94 @@
        (raise-user-error 'load-arm-restrictions
                          "unknown restriction form ~s"
                          form)]))
-  (arm-restrictions default (reverse allow) (reverse deny) file))
+  (define allow-list (reverse allow))
+  (define deny-list (reverse deny))
+  (arm-restrictions default
+                    allow-list
+                    deny-list
+                    file
+                    (build-pattern-index allow-list)
+                    (build-pattern-index deny-list)
+                    (make-hasheqv)
+                    (make-hash)))
 
 (define (pattern-match? pattern word)
   (= (bitwise-and word (compiled-pattern-mask pattern))
      (compiled-pattern-bits pattern)))
 
 (define (any-pattern-match? patterns word)
-  (cond
-    [(empty? patterns) #f]
-    [else (or (pattern-match? (car patterns) word)
-              (any-pattern-match? (cdr patterns) word))]))
+  (for/or ([pattern patterns])
+    (pattern-match? pattern word)))
+
+(define (pattern-index-keys pattern)
+  (let loop ([bit 31] [keys '(0)] [wildcards 0])
+    (cond
+      [(< bit pattern-index-shift) keys]
+      [else
+       (define word-bit (arithmetic-shift 1 bit))
+       (define key-bit (arithmetic-shift 1 (- bit pattern-index-shift)))
+       (if (= (bitwise-and (compiled-pattern-mask pattern) word-bit) 0)
+           (let ([next-wildcards (add1 wildcards)])
+             (and (<= next-wildcards pattern-index-wildcard-limit)
+                  (loop (sub1 bit)
+                        (append keys
+                                (map (lambda (key) (bitwise-ior key key-bit))
+                                     keys))
+                        next-wildcards)))
+           (loop (sub1 bit)
+                 (if (= (bitwise-and (compiled-pattern-bits pattern) word-bit) 0)
+                     keys
+                     (map (lambda (key) (bitwise-ior key key-bit)) keys))
+                 wildcards))])))
+
+(define (build-pattern-index patterns)
+  (define buckets (make-vector pattern-index-size '()))
+  (define fallback '())
+  (for ([pattern patterns])
+    (define keys (pattern-index-keys pattern))
+    (if keys
+        (for ([key keys])
+          (vector-set! buckets key (cons pattern (vector-ref buckets key))))
+        (set! fallback (cons pattern fallback))))
+  (pattern-index (vector-map reverse buckets) (reverse fallback)))
+
+(define (pattern-index-key word)
+  (arithmetic-shift (bitwise-and word arm-u32-mask) (- pattern-index-shift)))
+
+(define (any-indexed-pattern-match? index word)
+  (or (any-pattern-match? (vector-ref (pattern-index-buckets index)
+                                      (pattern-index-key word))
+                          word)
+      (any-pattern-match? (pattern-index-fallback index) word)))
+
+(define (arm-word-allowed?/linear restrictions word)
+  (define base-allowed?
+    (if (equal? (arm-restrictions-default restrictions) 'allow)
+        #t
+        (any-pattern-match? (arm-restrictions-allow restrictions) word)))
+  (and base-allowed?
+       (not (any-pattern-match? (arm-restrictions-deny restrictions) word))))
+
+(define (arm-word-allowed?/indexed restrictions word)
+  (define base-allowed?
+    (if (equal? (arm-restrictions-default restrictions) 'allow)
+        #t
+        (any-indexed-pattern-match? (arm-restrictions-allow-index restrictions) word)))
+  (and base-allowed?
+       (not (any-indexed-pattern-match? (arm-restrictions-deny-index restrictions) word))))
 
 (define (arm-word-allowed? restrictions word)
   (cond
     [(not restrictions) #t]
     [(not word) #f]
+    [(not (integer? word)) (arm-word-allowed?/linear restrictions word)]
     [else
-     (define base-allowed?
-       (if (equal? (arm-restrictions-default restrictions) 'allow)
-           #t
-           (any-pattern-match? (arm-restrictions-allow restrictions) word)))
-     (and base-allowed?
-          (not (any-pattern-match? (arm-restrictions-deny restrictions) word)))]))
+     (define cache (arm-restrictions-word-cache restrictions))
+     (define normalized-word (bitwise-and word arm-u32-mask))
+     (hash-ref! cache
+                normalized-word
+                (lambda ()
+                  (arm-word-allowed?/indexed restrictions normalized-word)))]))
 
 (define (sym-member? x xs)
   (cond
@@ -807,8 +879,32 @@
      (arm-inst->word-by-name machine (base-opcode-name machine op-id)
                              cond-code shf-id args)]))
 
-(define (arm-inst-allowed? restrictions machine my-inst)
+(define (cacheable-part? value)
+  (or (integer? value) (boolean? value) (string? value) (symbol? value)))
+
+(define (cacheable-vector? values)
+  (for/and ([value values])
+    (cacheable-part? value)))
+
+(define (cacheable-inst? my-inst)
+  (and (cacheable-vector? (inst-op my-inst))
+       (cacheable-vector? (inst-args my-inst))))
+
+(define (inst-cache-key machine my-inst)
+  (list (send machine get-restriction-reg-map)
+        (vector->list (inst-op my-inst))
+        (vector->list (inst-args my-inst))))
+
+(define (arm-inst-allowed?/uncached restrictions machine my-inst)
   (arm-word-allowed? restrictions (arm-inst->word machine my-inst)))
+
+(define (arm-inst-allowed? restrictions machine my-inst)
+  (if (cacheable-inst? my-inst)
+      (hash-ref! (arm-restrictions-inst-cache restrictions)
+                 (inst-cache-key machine my-inst)
+                 (lambda ()
+                   (arm-inst-allowed?/uncached restrictions machine my-inst)))
+      (arm-inst-allowed?/uncached restrictions machine my-inst)))
 
 (define (arm-program-allowed? restrictions machine code)
   (for/and ([my-inst code])

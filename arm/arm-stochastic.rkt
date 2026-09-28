@@ -40,17 +40,18 @@
 	      (member (base-opcode-name opcode-id) flag-writing-opcodes))
 
 	    (define (prefer-flag-opcodes opcode-pool)
-	      (define flag-pool (filter flag-writing-opcode? opcode-pool))
 	      ;; When NZCV is live-out, most non-flag-writing instructions sit on
 	      ;; a very flat stochastic plateau: they preserve old flags and are
 	      ;; usually equally wrong.  Biasing random generation and opcode
 	      ;; mutation toward flag-writing/test opcodes gives the search a way
 	      ;; to discover candidates such as `subs ...` for `cmp ...`, while
 	      ;; still leaving the full restriction-filtered opcode pool reachable.
-	      (if (and flag-output-live?
-	               (not (empty? flag-pool))
-	               (< (random) flag-opcode-bias))
-	          flag-pool
+	      (if flag-output-live?
+	          (let ([flag-pool (filter flag-writing-opcode? opcode-pool)])
+	            (if (and (not (empty? flag-pool))
+	                     (< (random) flag-opcode-bias))
+	                flag-pool
+	                opcode-pool))
 	          opcode-pool))
 
 	    (define (any-flag-live? state)
@@ -67,77 +68,6 @@
 	    (define (nonempty-list? xs)
 	      (and (list? xs) (not (empty? xs))))
 
-	    (define (memory-immediate-op? op-name)
-	      (member op-name '(ldr# str# ldrh# strh#)))
-
-	    (define (register-offset-op-name op-name)
-	      (case op-name
-	        [(ldr#) 'ldr]
-	        [(str#) 'str]
-	        [(ldrh#) 'ldrh]
-	        [(strh#) 'strh]
-	        [else #f]))
-
-	    (define (memory-byte-offset op-name raw-offset)
-	      (and (number? raw-offset)
-	           (case op-name
-	             [(ldr# str#) (* 4 raw-offset)]
-	             [(ldrh# strh#) raw-offset]
-	             [else #f])))
-
-	    (define (fresh-temp-reg used-regs)
-	      (for/or ([reg (in-range (send machine get-config))])
-	              (and (not (member reg used-regs)) reg)))
-
-	    (define (materialized-memory-offset-seed spec)
-	      (and (= (vector-length spec) 1)
-	           (let* ([source (vector-ref spec 0)]
-	                  [source-op (inst-op source)]
-	                  [source-args (inst-args source)]
-	                  [op-name (send machine get-base-opcode-name
-	                                 (vector-ref source-op 0))]
-	                  [replacement-op-name (register-offset-op-name op-name)])
-	             (and replacement-op-name
-	                  (memory-immediate-op? op-name)
-	                  (= (vector-length source-args) 3)
-	                  (let* ([byte-offset
-	                          (memory-byte-offset op-name (vector-ref source-args 2))]
-	                         [tmp
-	                          (fresh-temp-reg
-	                           (remove-duplicates
-	                            (filter number?
-	                                    (vector->list
-	                                     (vector-copy source-args 0 2)))))]
-	                         [cond-id (vector-ref source-op 1)]
-	                         [mov-op
-	                          (vector (send machine get-base-opcode-id 'mov#)
-	                                  cond-id
-	                                  -1)]
-	                         [replacement-op
-	                          (vector (send machine get-base-opcode-id replacement-op-name)
-	                                  cond-id
-	                                  -1)])
-	                    (and byte-offset
-	                         (not (= byte-offset 0))
-	                         tmp
-	                         (let ([candidate
-	                                (vector
-	                                 (inst mov-op (vector tmp byte-offset))
-	                                 (inst replacement-op
-	                                       (vector (vector-ref source-args 0)
-	                                               (vector-ref source-args 1)
-	                                               tmp)))])
-	                           (and (send machine program-allowed? candidate)
-	                                candidate))))))))
-
-	    (define (size-allows-materialized-offset-seed? size)
-	      (define numeric-size
-	        (cond
-	          [(number? size) size]
-	          [(string? size) (string->number size)]
-	          [else #f]))
-	      (or (not numeric-size) (>= numeric-size 2)))
-
 	    (define (superoptimize spec constraint
 	                           name time-limit size
 	                           #:prefix [prefix (vector)]
@@ -146,17 +76,13 @@
 	                           #:input-file [input-file #f]
 	                           #:start-prog [start #f])
 	      (set! flag-output-live? (and (any-flag-live? constraint) #t))
-	      (define seeded-start
-	        (or start
-	            (and (size-allows-materialized-offset-seed? size)
-	                 (materialized-memory-offset-seed spec))))
 	      (super superoptimize spec constraint
 	             name time-limit size
 	             #:prefix prefix
 	             #:postfix postfix
 	             #:assume assumption
 	             #:input-file input-file
-	             #:start-prog seeded-start))
+	             #:start-prog start))
 
 	    (define (u32-random)
 	      (bitwise-ior (arithmetic-shift (random 65536) 16)
@@ -238,6 +164,7 @@
 	             [tries 0])
 	      (when (> tries 1000)
 	        (raise "random-instruction: cannot find an instruction allowed by the current ISA restrictions"))
+	      (define requested-opcode-id opcode-id)
 	      (unless opcode-id
 	        (define opcode-pool
 	          (send machine get-valid-opcode-pool index n live-in))
@@ -248,7 +175,8 @@
 	      (define candidate (and args (inst opcode-id args)))
 	      (if (and candidate (send machine inst-allowed? candidate))
 	          candidate
-	          (random-instruction index n live-in #f (add1 tries))))
+	          (and (not requested-opcode-id)
+	               (random-instruction index n live-in #f (add1 tries)))))
 
 	    (define (random-args-from-op opcode-id live-in)
 	      (define types (send machine get-arg-types opcode-id))
@@ -267,31 +195,54 @@
     (define/override (mutate-opcode index entry p)
       (define opcode-id (inst-op entry))
       (define opcode-name (send machine get-opcode-name opcode-id))
-      (define op-types
-        (filter identity (for/list ([op opcode-id] [index (in-naturals)]) (and (>= op 0) index))))
-      (define op-type (random-from-list op-types))
-      (define checks (remove op-type (range (vector-length opcode-id))))
+      (define opcode-arg-types (send machine get-arg-types opcode-id))
+      (define class-opcodes (or (send machine get-class-opcodes opcode-id) '()))
+      (define same-shape-opcodes
+        (filter
+         (lambda (candidate)
+           (equal? (send machine get-arg-types candidate) opcode-arg-types))
+         (get-field opcode-pool machine)))
+      (define (same-except? candidate skip-index)
+        (for/and ([field-index (in-range (vector-length opcode-id))]
+                  #:unless (= field-index skip-index))
+                 (= (vector-ref candidate field-index)
+                    (vector-ref opcode-id field-index))))
+      (define (changes-field? candidate field-index)
+        (not (= (vector-ref candidate field-index)
+                (vector-ref opcode-id field-index))))
+      (define (field-candidates field-index)
+        (filter
+         (lambda (candidate)
+           (and (same-except? candidate field-index)
+                (changes-field? candidate field-index)))
+         (if (>= (vector-ref opcode-id field-index) 0)
+             class-opcodes
+             same-shape-opcodes)))
+      (define op-type-classes
+        (filter
+         (lambda (op-type-class)
+           (nonempty-list? (cdr op-type-class)))
+         (for/list ([field-index (in-range (vector-length opcode-id))])
+           (cons field-index (field-candidates field-index)))))
       (define class
-        (prefer-flag-opcodes
-         (filter
-          (lambda (x) (for/and ([index checks]) (= (vector-ref x index) (vector-ref opcode-id index))))
-          (send machine get-class-opcodes opcode-id))))
+        (and
+         (nonempty-list? op-type-classes)
+         (prefer-flag-opcodes (cdr (random-from-list op-type-classes)))))
       (when debug
             (pretty-display (format " >> mutate opcode"))
             (pretty-display (format " --> org = ~a ~a" opcode-name opcode-id))
-            (pretty-display (format " --> op-type = ~a" op-type))
+            (pretty-display (format " --> op-types = ~a" (map car op-type-classes)))
             (pretty-display (format " --> class = ~a" class)))
       (cond
        [(nonempty-list? class)
-        (define new-opcode-id (random-from-list-ex class opcode-id))
+        (define new-opcode-id (random-from-list class))
         (define new-p (vector-copy p))
         (when debug
               (pretty-display (format " --> new = ~a ~a" (send machine get-opcode-name new-opcode-id) new-opcode-id)))
         (vector-set! new-p index (inst-copy-with-op entry new-opcode-id))
         (send stat inc-propose `opcode)
         new-p]
-
-	       [else (mutate p)]))
+       [else (mutate p)]))
 
 	    ;; Mutate operand.  This mirrors the generic stochastic mutator, but
 	    ;; lets ARM immediates draw from their broader semantic domains instead
@@ -360,8 +311,8 @@
          (flag-bit-cost (progstate-n state1) (progstate-n state2) (progstate-n constraint))
          (flag-bit-cost (progstate-zf state1) (progstate-zf state2) (progstate-zf constraint))
          (flag-bit-cost (progstate-c state1) (progstate-c state2) (progstate-c constraint))
-         (flag-bit-cost (progstate-v state1) (progstate-v state2) (progstate-v constraint))))
-    ))
+	         (flag-bit-cost (progstate-v state1) (progstate-v state2) (progstate-v constraint))))
+	    ))
 
 
 

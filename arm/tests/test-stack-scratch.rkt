@@ -116,8 +116,26 @@
  (check-equal? (list-ref remapped 2) 'downwards))
 
 (test-case
+ "ARM compression preserves architectural sp/lr ids for push-style code"
+ (define machine (new arm-machine%))
+ (define printer (new arm-printer% [machine machine]))
+ (define-values (compressed _live map-back config)
+   (send printer compress-state-space
+         (send parser ir-from-string "push {r4, r5, lr}\nadd r4, r0, r1\n")
+         '(0 memory)))
+ (define push-inst (vector-ref compressed 0))
+ (define push-args (inst-args push-inst))
+ (define push-regmask (string->number (vector-ref push-args 1)))
+ (check-equal? config 15)
+ (check-equal? (vector-ref map-back 13) 13)
+ (check-equal? (vector-ref map-back 14) 14)
+ (check-equal? (vector-ref push-args 0) "r13")
+ (check-equal? (bitwise-bit-field push-regmask 14 15) 1))
+
+(test-case
  "ARM compression preserves r15 as the PC register"
  (define machine (new arm-machine%))
+ (send machine set-min-scratch-regs! 1)
  (define printer (new arm-printer% [machine machine]))
  (define-values (compressed _live map-back config)
    (send printer compress-state-space
@@ -130,6 +148,7 @@ eor r6, r6, r7
 ")
          '(2)))
  (check-true (> config 15))
+ (check-equal? (send machine get-min-scratch-regs) 0)
  (check-equal? (vector-ref map-back 15) 15)
  (check-equal? (vector-ref (inst-args (vector-ref compressed 2)) 2) "r15"))
 

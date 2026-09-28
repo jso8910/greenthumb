@@ -32,6 +32,7 @@
      [isa-restrictions #f]   ;; Optional ISA-specific candidate restrictions.
      [restriction-reg-map #f]
      [stack-scratch-config #f]
+     [min-scratch-regs 0]
      )
     
     ;; Required methods to be implemented.
@@ -69,6 +70,7 @@
      set-stack-scratch-config! clear-stack-scratch-config!
      get-stack-scratch-config stack-scratch-enabled?
      remap-stack-scratch-config
+     set-min-scratch-regs! get-min-scratch-regs
 
      ;; For enumerative search
      get-inst-key
@@ -172,6 +174,16 @@
     (define (inst-allowed? my-inst) #t)
     (define (program-allowed? code)
       (for/and ([my-inst code]) (inst-allowed? my-inst)))
+
+    (define (set-min-scratch-regs! n)
+      (unless (and (integer? n) (>= n 0))
+              (raise-user-error
+               'set-min-scratch-regs!
+               "minimum scratch register count must be a non-negative integer, got ~a"
+               n))
+      (set! min-scratch-regs n))
+
+    (define (get-min-scratch-regs) min-scratch-regs)
 
     (define (normalize-stack-direction direction)
       (cond

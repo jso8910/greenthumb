@@ -23,12 +23,20 @@
                 [w-error 9999]
                 [beta 1]
                 [nop-mass 0.8]
+                [performance-cost-syn 1]
+                [performance-cost-opt 5]
                 [ntests 16]
                 [mutate-dist 
                  #hash((opcode . 1) (operand . 1) (swap . 1) (instruction . 1))]
                 [live-in #f])
     
     (define nop-id (get-field nop-id machine))
+
+    (define (performance-weight)
+      (if syn-mode performance-cost-syn performance-cost-opt))
+
+    (define (total-cost-for performance-cost correct)
+      (+ (* (performance-weight) performance-cost) correct))
   
     ;; (define (print-mutation-info)
     ;;   (for ([op opcodes]
@@ -58,7 +66,9 @@
       (when (and start
                  (not syn-mode)
                  (send machine program-allowed? start))
-            (send stat update-best-correct start (send simulator performance-cost start))
+            (send stat update-best-correct
+                  start
+                  (total-cost-for (send simulator performance-cost start) 0))
             (set! early-seeded-best-correct? #t))
 
       ;; 1) User-provided live-in
@@ -132,7 +142,9 @@
       (define spec-allowed? (send machine program-allowed? spec))
       (define seed-best-correct? (and (not syn-mode) spec-allowed?))
       (if (and seed-best-correct? (not early-seeded-best-correct?))
-          (send stat update-best-correct spec (send simulator performance-cost spec))
+          (send stat update-best-correct
+                spec
+                (total-cost-for (send simulator performance-cost spec) 0))
           (unless early-seeded-best-correct?
             (set-field! best-correct-program stat #f)
             (set-field! best-correct-cost stat w-error)))
@@ -298,9 +310,12 @@
       (when debug
             (pretty-display (format " >> mutate instruction ~a" (send machine get-opcode-name new-opcode-id))))
       (define new-entry (random-instruction index n my-live-in new-opcode-id))
-      (vector-set! new-p index new-entry)
-      new-p)
-    
+      (if new-entry
+          (begin
+            (vector-set! new-p index new-entry)
+            new-p)
+          (mutate p)))
+
     ;; Create a new instruction with operands that are live (in live-in) and with opcode-id if specified.
     ;; live-in: vector/list/pair format
     (define (random-instruction
@@ -309,6 +324,7 @@
              [tries 0])
       (when (> tries 1000)
         (raise "random-instruction: cannot find an instruction allowed by the current ISA restrictions"))
+      (define requested-opcode-id opcode-id)
       (unless opcode-id
         (set! opcode-id (random-from-list (send machine get-valid-opcode-pool index n live-in))))
       (when #f
@@ -318,7 +334,8 @@
       (define candidate (and args (inst opcode-id args)))
       (if (and candidate (send machine inst-allowed? candidate))
           candidate
-          (random-instruction index n live-in #f (add1 tries))))
+          (and (not requested-opcode-id)
+               (random-instruction index n live-in #f (add1 tries)))))
     
     ;; Create random operands from opcode.
     (define (random-args-from-op opcode-id live-in)
@@ -397,7 +414,7 @@
         (define index (random vec-len))
         (define new-p 
           (vector-append (vector-copy p 0 index) (vector-copy p (add1 index) vec-len)))
-        (define cost (or (car (cost-all-inputs new-p w-error)) w-error))
+        (define cost (cost-or-error new-p))
         (values new-p cost))
 
       (define (reduce-size p cost size [ps (list)] [costs (list)])
@@ -444,11 +461,12 @@
       
       (define (cost-all-inputs program okay-cost)
         (define change-mode #f)
+        (define program-performance-cost (send simulator performance-cost program))
 
         (define (loop correct inputs outputs)
           (when debug (pretty-display `(correct ,correct)))
           (cond
-           [(> correct okay-cost) #f]
+           [(> (total-cost-for program-performance-cost correct) okay-cost) #f]
            [(empty? inputs) correct]
            [else
             (let ([cost (cost-one-input program (car inputs) (car outputs))])
@@ -463,40 +481,55 @@
         (when debug (pretty-display `(final-correct ,correct ,(length inputs))))
 
         (define ce #f)
+        (define skipped-non-improving-correct? #f)
         (when (and (number? correct) (= correct 0))
-              (send stat inc-validate)
-              (define t1 (current-milliseconds))
-              ;; (pretty-display `(counterexample))
-              ;; (send printer print-syntax (send printer decode program))
-              (set! ce (send validator counterexample 
-                             (vector-append prefix target postfix)
-                             (vector-append prefix program postfix)
-                             constraint #:assume assumption))
-              (if ce 
-                  (begin
-                    (set! correct 1)
-                    (set! ce (send simulator interpret prefix ce))
-                    (set! inputs (cons ce inputs))
-                    (set! outputs (cons (send simulator interpret target ce) 
-                                        outputs))
-                    (pretty-display (format "Add counterexample. Total = ~a." (length inputs)))
-                    (send machine display-state ce)
-		    (send printer print-syntax (send printer decode program))
-                    (when (> (length inputs) 100) (raise "ce > 100"))
-                    )
-                  (begin
-                    (send stat inc-correct)
-                    (when syn-mode (set! change-mode #t) (set! syn-mode #f))
-                    ;;(send stat inc-correct)
-                    ))
-              
-              (define t2 (current-milliseconds))
-              (send stat validate (- t2 t1))
+              (define known-best-correct-cost (get-field best-correct-cost stat))
+              (define candidate-performance-cost
+                (and (not syn-mode)
+                     (number? known-best-correct-cost)
+                     (< known-best-correct-cost w-error)
+                     (total-cost-for program-performance-cost 0)))
+              (cond
+                [(and candidate-performance-cost
+                      (>= candidate-performance-cost known-best-correct-cost))
+                 (set! skipped-non-improving-correct? #t)
+                 (set! correct #f)]
+                [else
+                 (send stat inc-validate)
+                 (define t1 (current-milliseconds))
+                 ;; (pretty-display `(counterexample))
+                 ;; (send printer print-syntax (send printer decode program))
+                 (set! ce (send validator counterexample
+                                (vector-append prefix target postfix)
+                                (vector-append prefix program postfix)
+                                constraint #:assume assumption))
+                 (if ce
+                     (begin
+                       (set! correct 1)
+                       (set! ce (send simulator interpret prefix ce))
+                       (set! inputs (cons ce inputs))
+                       (set! outputs (cons (send simulator interpret target ce)
+                                           outputs))
+                       (pretty-display (format "Add counterexample. Total = ~a." (length inputs)))
+                       (send machine display-state ce)
+		       (send printer print-syntax (send printer decode program))
+                       (when (> (length inputs) 100) (raise "ce > 100"))
+                       )
+                     (begin
+                       (send stat inc-correct)
+                       (when syn-mode (set! change-mode #t) (set! syn-mode #f))
+                       ;;(send stat inc-correct)
+                       ))
+
+                 (define t2 (current-milliseconds))
+                 (send stat validate (- t2 t1))])
               )
         
-        (if (number? correct)
-            (let ([total-cost 
-                   (if syn-mode correct (+ (send simulator performance-cost program) correct))])
+        (if skipped-non-improving-correct?
+            (cons #f #f)
+            (if (number? correct)
+            (let ([total-cost
+                   (total-cost-for program-performance-cost correct)])
               (when debug (pretty-display `(total-cost ,total-cost)))
               (when (< total-cost (get-field best-cost stat))
                     (send stat update-best program total-cost)
@@ -522,8 +555,12 @@
                   ;; return (correctness-cost . correct)
                   (cons total-cost (= correct 0))
                   (cons #f #f)))
-            (cons #f #f))
+            (cons #f #f)))
         )
+
+      (define (cost-or-error program)
+        (or (car (cost-all-inputs program +inf.0))
+            (total-cost-for (send simulator performance-cost program) w-error)))
 
       (define (accept-cost current-cost)
         (- current-cost (/ (log (random)) beta)))
@@ -620,11 +657,7 @@
        ([exn:break? (lambda (e) (send stat print-stat-to-file))])
        
        (timeout time-limit
-                (iter init 
-                      ;; cost-all-inputs can return #f if program is invalid
-                      (or (car (cost-all-inputs init w-error))
-                          w-error)
-                      ))))
+                (iter init (cost-or-error init)))))
 
     ;; Population count for 32-bit number
     (define (pop-count32 a)

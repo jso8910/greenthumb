@@ -411,6 +411,11 @@
                 old-carry
                 (< (finitize-bit (ror value amount)) 0)))
 
+          (define (ror-register-carry value amount real-amount)
+            (if (or (not (number? amount)) (= amount 0))
+                old-carry
+                (< (finitize-bit (ror value real-amount)) 0)))
+
           (define (shift-result-and-carry value shf-name amount register-shift?)
             (define amt (if register-shift? (bitwise-and amount #xff) amount))
             (cond
@@ -439,7 +444,7 @@
              [(equal? shf-name 'ror)
               (define real-amt (if (number? amt) (modulo amt bit) (bitwise-and amt #x1f)))
               (values (finitize-bit (ror value real-amt))
-                      (ror-carry value real-amt))]
+                      (ror-register-carry value amt real-amt))]
              [(equal? shf-name 'ror#)
               (if (= amt 0)
                   (values (finitize-bit

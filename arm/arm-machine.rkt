@@ -89,11 +89,12 @@
 
     (define (inst-allowed? my-inst)
       (or (not isa-restrictions)
+          (= (vector-ref (inst-op my-inst) 0) (vector-ref nop-id 0))
           (arm-inst-allowed? isa-restrictions this my-inst)))
 
     (define (program-allowed? code)
       (or (not isa-restrictions)
-          (arm-program-allowed? isa-restrictions this code)))
+          (for/and ([my-inst code]) (inst-allowed? my-inst))))
 
     (unless bitwidth (set! bitwidth 32))
     (set! random-input-bits bitwidth)
@@ -605,12 +606,7 @@
     ;; synthesis.  Keep this as a correctness-oriented superset: opcode
     ;; usefulness is a proposal-bias concern, not a hard reachability gate.
     (define/override (analyze-opcode prefix code postfix)
-      (define unmodeled-rosette-opcodes
-        '(ldm-full# stm-full#))
-      (define modeled-opcodes
-        (filter-not
-         (lambda (opcode-name) (member opcode-name unmodeled-rosette-opcodes))
-         (vector->list (vector-ref opcodes 0))))
+      (define modeled-opcodes (vector->list (vector-ref opcodes 0)))
       (set! inst-choice-name modeled-opcodes)
       (when debug (pretty-display `(inst-choice all-modeled)))
       (set! opcode-pool
@@ -675,14 +671,54 @@
 
       (define exclude (append reg-list context-reg-list))
       
-      ;; If there are too few regs, add one more.
-      ;; But try to add one that does not use anywhere
-      ;; (including prefix and postfix).
-      (when (<= (length reg-list) 2)
-            (let ([add-reg
-                   (for/or ([i config])
-                           (and (not (member i exclude)) i))])
-              (when add-reg (set-argtype-valid! type-reg (cons add-reg reg-list)))))
+      (define (first-n xs n)
+        (cond
+         [(or (<= n 0) (empty? xs)) '()]
+         [else (cons (car xs) (first-n (cdr xs) (sub1 n)))]))
+
+      (define min-scratch-regs (send this get-min-scratch-regs))
+      (define scratch-regs
+        (first-n
+         (for/list ([i (in-range config)]
+                    #:unless (member i exclude))
+                   i)
+         min-scratch-regs))
+      (unless (= (length scratch-regs) min-scratch-regs)
+              (raise-user-error
+               'analyze-args
+               "compressed machine config has only ~a scratch register(s), but ~a requested"
+               (length scratch-regs)
+               min-scratch-regs))
+      (define candidate-reg-list (remove-duplicates (append reg-list scratch-regs)))
+      (set-argtype-valid! type-reg candidate-reg-list)
+
+      (define type-reglist (hash-ref argtypes-info 'reglist))
+      (define (regs->mask regs)
+        (for/fold ([mask 0]) ([reg-id regs])
+          (bitwise-ior mask (arithmetic-shift 1 reg-id))))
+      (define (reglist-masks-up-to regs max-size)
+        (define clean-regs
+          (sort
+           (remove-duplicates
+            (filter (lambda (reg-id)
+                      (and (integer? reg-id) (<= 0 reg-id) (< reg-id 16)))
+                    regs))
+           <))
+        (define (loop rest chosen remaining)
+          (append
+           (if (empty? chosen) '() (list (regs->mask chosen)))
+           (cond
+            [(or (= remaining 0) (empty? rest)) '()]
+            [else
+             (append (loop (cdr rest) (cons (car rest) chosen) (sub1 remaining))
+                     (loop (cdr rest) chosen remaining))])))
+        (remove-duplicates
+         (append (loop clean-regs '() (min max-size (length clean-regs)))
+                 (if (empty? clean-regs) '() (list (regs->mask clean-regs))))))
+      (set-argtype-valid! type-reglist
+                          (remove-duplicates
+                           (append (argtype-valid type-reglist)
+                                   (reglist-masks-up-to candidate-reg-list 4))))
       
       (for ([pair (hash->list argtypes-info)])
            (let ([name (car pair)]

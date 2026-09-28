@@ -16,6 +16,7 @@
 (define greenthumb-root (simplify-path (build-path script-dir "../..")))
 (define optimizer-path (build-path greenthumb-root "arm/optimize.rkt"))
 (define racket-executable (find-executable-path "racket"))
+(define raco-executable (find-executable-path "raco"))
 (define pgrep-executable (find-executable-path "pgrep"))
 (define kill-executable (find-executable-path "kill"))
 
@@ -78,6 +79,9 @@
 (define workers (make-parameter 4))
 (define post-correct-time (make-parameter 20))
 (define post-correct-remaining-frac (make-parameter 1/4))
+(define performance-cost-syn (make-parameter 1))
+(define performance-cost-opt (make-parameter 5))
+(define precompile? (make-parameter #t))
 (define selected-case-spec (make-parameter #f))
 (define output-root
   (make-parameter (build-path greenthumb-root "arm/restriction-superopt/output")))
@@ -100,12 +104,42 @@
  [("--no-two-phase-stop") "Disable post-correct early stopping." (post-correct-time #f) (post-correct-remaining-frac #f)]
 	 [("--post-correct-time") seconds "Seconds to keep improving after the first correct program." (post-correct-time (parse-nonnegative-number 'post-correct-time seconds))]
 	 [("--post-correct-remaining-frac" "--post-correct-frac") frac "Fraction of remaining timeout to keep improving after the first correct program." (post-correct-remaining-frac (parse-nonnegative-number 'post-correct-remaining-frac frac))]
+	 [("--performance-cost-syn") n "Performance-cost weight during stochastic synthesis." (performance-cost-syn (parse-nonnegative-number 'performance-cost-syn n))]
+	 [("--performance-cost-opt") n "Performance-cost weight during stochastic optimization." (performance-cost-opt (parse-nonnegative-number 'performance-cost-opt n))]
+         [("--no-precompile") "Do not run raco make before launching optimizer workers." (precompile? #f)]
 	 [("--cases") spec "Run only one-based case indexes/ranges, e.g. 1-3,6,10-12." (selected-case-spec spec)]
 	 [("-o" "--output-root") dir "GreenThumb optimizer output root." (output-root dir)]
 	 [("--generated-root") dir "Generated case root." (generated-root dir)])
 
 (when (< (workers) 4)
   (raise-user-error 'run-all "restriction superopt tests require at least 4 workers"))
+
+(define (precompile-optimizer!)
+  (when (precompile?)
+    (if raco-executable
+        (let ([precompile-paths
+               (map greenthumb-relative-string
+                    (list optimizer-path
+                          (build-path greenthumb-root "arm/arm-stochastic.rkt")))])
+          (printf "Precompiling GreenThumb Racket modules...\n")
+          (flush-output)
+          (let-values ([(sp stdout stdin stderr)
+                        (parameterize ([current-directory greenthumb-root])
+                          (apply subprocess
+                                 (current-output-port)
+                                 #f
+                                 (current-error-port)
+                                 raco-executable
+                                 "make"
+                                 precompile-paths))])
+            (close-output-port stdin)
+            (subprocess-wait sp)
+            (unless (equal? (subprocess-status sp) 0)
+              (printf "WARNING: raco make failed; continuing without refreshed bytecode caches.\n")
+              (flush-output))))
+        (begin
+          (printf "WARNING: raco not found; continuing without refreshed bytecode caches.\n")
+          (flush-output)))))
 
 (define (metadata-ref metadata key [default #f])
   (define found (assoc key metadata))
@@ -446,7 +480,9 @@
                     "-t" (number->string timeout)
                     "-n" (number->string size)
                     "-d" case-output-arg
-                    "--restrict" restrict-file-arg)
+                    "--restrict" restrict-file-arg
+                    "--performance-cost-syn" (format "~a" (performance-cost-syn))
+                    "--performance-cost-opt" (format "~a" (performance-cost-opt)))
               post-correct-args
               stack-args
               (list input-file-arg))])
@@ -506,6 +542,8 @@
 (define (count-status results status)
   (length (filter (lambda (result) (equal? (case-result-status result) status))
                   results)))
+
+(precompile-optimizer!)
 
 (define results
   (for/list ([case-dir (case-directories)])

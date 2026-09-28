@@ -52,7 +52,9 @@
     (init-field isa parser machine printer validator search-type mode
                 [window #f]
                 [restriction-file #f]
-                [solver-name 'kodkod])
+                [solver-name 'kodkod]
+                [performance-cost-syn 1]
+                [performance-cost-opt 5])
     ;; search = `solver, `stoch, `hybrid
     ;; mode = `linear, `binary, `syn, `opt
     (public optimize)
@@ -77,6 +79,7 @@
       ;; Use the fewest number of registers possible.
       (define-values (code live-out map-back machine-config) 
         (send printer compress-state-space code-org live-out-org))
+      (define min-scratch-regs (send machine get-min-scratch-regs))
       (define stack-scratch-config
         (send machine remap-stack-scratch-config map-back))
       (when restriction-file
@@ -125,6 +128,9 @@
                (pretty-display (format "(define machine (new ~a [config ~a]))"
                                        (get-class-name "machine")
                                        (send printer set-config-string machine-config)))
+               (pretty-display
+                (format "(send machine set-min-scratch-regs! ~a)"
+                        min-scratch-regs))
                (when stack-scratch-config
                      (pretty-display
                       (format "(send machine set-stack-scratch-config! ~a ~a '~a)"
@@ -145,9 +151,11 @@
                (cond
                 [(equal? search-type `stoch)
                  (pretty-display 
-                  (format "(define search (new ~a [machine machine] [printer printer] [parser parser] [validator validator] [simulator simulator-racket] [syn-mode ~a]))" 
+                  (format "(define search (new ~a [machine machine] [printer printer] [parser parser] [validator validator] [simulator simulator-racket] [syn-mode ~a] [performance-cost-syn ~a] [performance-cost-opt ~a]))" 
                           (get-class-name "stochastic") 
-                          (equal? mode `syn)))]
+                          (equal? mode `syn)
+                          performance-cost-syn
+                          performance-cost-opt))]
                 [(equal? search-type `solver)
                  (pretty-display 
                   (format "(define search (new ~a [machine machine] [printer printer] [parser parser] [validator validator] [simulator simulator-rosette] [syn-mode `~a] [solver-name '~a]))"
@@ -357,12 +365,25 @@
           (define (within-post-correct-window?)
             (or (not post-correct-deadline)
                 (< (current-seconds) post-correct-deadline)))
-          (define (update-stats)
-            (sleep (if (or post-correct-deadline
-                           post-correct-time
-                           post-correct-remaining-frac)
-                       1
-                       10))
+          (define (stats-poll-interval)
+            (if (or post-correct-deadline
+                    post-correct-time
+                    post-correct-remaining-frac)
+                1
+                10))
+          (define (seconds-until deadline)
+            (if deadline
+                (max 0 (- deadline (current-seconds)))
+                +inf.0))
+          (define (next-sleep-duration)
+            (min (stats-poll-interval)
+                 (max 0 (- limit (- (current-seconds) t)))
+                 (seconds-until post-correct-deadline)))
+          (define (update-stats [first? #t])
+            (unless first?
+              (define duration (next-sleep-duration))
+              (when (> duration 0)
+                    (sleep duration)))
             (maybe-start-post-correct-phase!)
             (when (and (within-time-limit?)
                        (within-post-correct-window?));(> (get-free-mem) 1000000))
@@ -379,7 +400,7 @@
                        (unless (equal? (subprocess-status sp) 'running)
                                (pretty-display (format "driver-~a is dead." (+ cores-stoch cores-solver id)))))
                   (get-stats)
-                  (update-stats)))
+                  (update-stats #f)))
 
           (with-handlers* 
            ([exn:break? (lambda (e) (kill-all) (sleep 5))])

@@ -308,8 +308,8 @@
       (define (inner-collect-reglist x)
         (define op (vector-ref (inst-op x) 0))
         (define args (inst-args x))
-        (when (and (member op '("ldm" "stm"))
-                   (= (vector-length args) 2))
+        (when (and (member op '("ldm" "stm" "ldm-full" "stm-full"))
+                   (>= (vector-length args) 2))
               (collect-reglist! (vector-ref args 1))))
 
       (for ([x program]) (inner-collect x))
@@ -329,9 +329,40 @@
             (set-add! reg-set sp-reg)
             (when (> sp-reg max-reg) (set! max-reg sp-reg)))
 
+      ;; Reserve real ARM registers for scratch use before compression.  These
+      ;; registers are not live-in/out, but must exist in the compressed
+      ;; machine config so stochastic search can choose them as temporaries.
+      (define requested-min-scratch-regs (send machine get-min-scratch-regs))
+      (define (collect-scratch-regs reg-id scratch-regs)
+        (cond
+         [(= (length scratch-regs) requested-min-scratch-regs) (reverse scratch-regs)]
+         [(>= reg-id 15) (reverse scratch-regs)]
+         [(set-member? reg-set reg-id)
+          (collect-scratch-regs (add1 reg-id) scratch-regs)]
+         [else
+          (collect-scratch-regs (add1 reg-id) (cons reg-id scratch-regs))]))
+      (define scratch-regs (collect-scratch-regs 0 '()))
+      (when (< (length scratch-regs) requested-min-scratch-regs)
+            (eprintf
+             "WARNING: compress-state-space: requested ~a scratch register(s), but only ~a non-PC ARM register(s) are free; continuing with ~a.\n"
+             requested-min-scratch-regs
+             (length scratch-regs)
+             (length scratch-regs))
+            (flush-output (current-error-port))
+            (send machine set-min-scratch-regs! (length scratch-regs)))
+      (for ([reg-id scratch-regs])
+           (collect-reg-id! reg-id))
+
+      ;; Keep architectural stack registers at their real ids.  Block-transfer
+      ;; register lists are raw bitmasks, so dense renumbering is especially
+      ;; error-prone for push/pop-style code that mentions sp/lr.
+      (cond
+       [(set-member? reg-set 14)
+        (for ([reg-id (in-range 15)]) (collect-reg-id! reg-id))]
+       [(set-member? reg-set 13)
+        (for ([reg-id (in-range 14)]) (collect-reg-id! reg-id))])
+
       ;; Construct register map from original to compressed version.
-      (set-add! reg-set (+ max-reg 1))
-      (set! max-reg (+ max-reg 1))
       (define reg-map (make-vector (add1 max-reg) #f))
       (define id 0)
       (for ([i 32])

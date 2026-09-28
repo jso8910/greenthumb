@@ -80,14 +80,18 @@
                   #:restriction-file [restriction-file #f]
                   #:solver-name [solver-name 'kodkod]
                   #:stack-scratch-config [stack-scratch-config #f]
+                  #:min-scratch-regs [min-scratch-regs 1]
                   #:post-correct-time [post-correct-time #f]
-                  #:post-correct-remaining-frac [post-correct-remaining-frac #f])
+                  #:post-correct-remaining-frac [post-correct-remaining-frac #f]
+                  #:performance-cost-syn [performance-cost-syn 1]
+                  #:performance-cost-opt [performance-cost-opt 5])
   (define normalized-solver-name (normalize-solver-name solver-name))
   (define normalized-restriction-file
     (and restriction-file
          (path->string (simplify-path (path->complete-path restriction-file)))))
   (define parser (new arm-parser%))
   (define machine (new arm-machine%))
+  (send machine set-min-scratch-regs! min-scratch-regs)
   (when stack-scratch-config
         (send machine set-stack-scratch-config!
               (list-ref stack-scratch-config 0)
@@ -106,7 +110,9 @@
                         [search-type search-type] [mode mode]
                         [window window]
                         [restriction-file normalized-restriction-file]
-                        [solver-name normalized-solver-name]))
+                        [solver-name normalized-solver-name]
+                        [performance-cost-syn performance-cost-syn]
+                        [performance-cost-opt performance-cost-opt]))
 
   (send parallel optimize code effective-live-out 
         #:dir dir #:cores cores 

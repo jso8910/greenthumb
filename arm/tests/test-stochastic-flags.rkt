@@ -5,6 +5,7 @@
          racket/list
          racket/runtime-path
          "../../inst.rkt"
+         "../../machine.rkt"
          "../arm-parser.rkt"
          "../arm-machine.rkt"
          "../arm-printer.rkt"
@@ -129,15 +130,19 @@
 
 (define all-live
   (progstate (make-vector 5 #t) #t #t #t #t #t))
+(define candidate-code
+  (send candidate-printer encode
+        (send parser ir-from-string
+              "add r0, r1, r2\nstr r3, [r4, #0]\n")))
 
 (parameterize ([current-output-port (open-output-string)])
   (send candidate-machine analyze-args
         (vector)
-        (vector)
+        candidate-code
         (vector)
         all-live
         all-live))
-(send candidate-machine analyze-opcode (vector) (vector) (vector))
+(send candidate-machine analyze-opcode (vector) candidate-code (vector))
 
 (define candidate-pool-names
   (sorted-symbols
@@ -145,8 +150,13 @@
           (send candidate-machine get-base-opcode-name (vector-ref opcode-id 0)))
         (get-field opcode-pool candidate-machine))))
 
-(check-equal? (remove* candidate-pool-names machine-opcodes)
-              '(ldm-full# stm-full#))
+(check-equal? (remove* candidate-pool-names machine-opcodes) '())
+(check-not-false (member 'ldm-full# candidate-pool-names))
+(check-not-false (member 'stm-full# candidate-pool-names))
+
+(define reglist-range
+  (argtype-valid (hash-ref (get-field argtypes-info candidate-machine) 'reglist)))
+(check-not-false (member #b10001 reglist-range))
 
 (define stochastic-generation-failures
   (for/list ([opcode-id (get-field opcode-pool candidate-machine)]

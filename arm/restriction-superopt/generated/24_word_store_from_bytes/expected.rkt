@@ -7,4 +7,4 @@
  (require-discovered #f)
  (mode "syn")
  (expected-shape "four strb operations with shifts to write each byte")
- (forbidden-opcodes ("str")))
+ (forbidden-opcodes ("str" "strh" "stm" "swp" "swpb")))

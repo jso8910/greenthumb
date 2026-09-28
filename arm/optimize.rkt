@@ -21,8 +21,11 @@
 (define stack-pointer-reg (make-parameter #f))
 (define stack-scratch-size (make-parameter #f))
 (define stack-direction (make-parameter #f))
+(define min-scratch-regs (make-parameter 1))
 (define post-correct-time (make-parameter #f))
 (define post-correct-remaining-frac (make-parameter #f))
+(define performance-cost-syn (make-parameter 1))
+(define performance-cost-opt (make-parameter 5))
 
 (define (parse-nonnegative-integer who value)
   (define parsed (string->number value))
@@ -94,6 +97,12 @@
    [("--post-correct-remaining-frac" "--post-correct-frac") f
                         "Two-phase stop: max fraction of the remaining timeout to keep improving after the first validated correct program."
                         (post-correct-remaining-frac (parse-nonnegative-number 'post-correct-remaining-frac f))]
+   [("--performance-cost-syn") n
+                        "Performance-cost weight during stochastic synthesis. (default=1)"
+                        (performance-cost-syn (parse-nonnegative-number 'performance-cost-syn n))]
+   [("--performance-cost-opt") n
+                        "Performance-cost weight during stochastic optimization. (default=5)"
+                        (performance-cost-opt (parse-nonnegative-number 'performance-cost-opt n))]
    [("-n" "--size")     n
                         "Code size limit. (default=#f)."
                         (size n)]
@@ -115,6 +124,9 @@
    [("--stack-direction") d
                         "Stack scratch direction: upwards/up or downwards/down."
                         (stack-direction (parse-stack-direction d))]
+   [("--min-scratch-regs") n
+                        "Minimum number of non-live registers to reserve for synthesis temporaries. (default=1)"
+                        (min-scratch-regs (parse-nonnegative-integer 'min-scratch-regs n))]
    [("-w" "--window")    w
                         "Window size."
                         (window (string->number w))]
@@ -163,8 +175,11 @@
             #:restriction-file (restriction-file)
             #:solver-name (solver-name)
             #:stack-scratch-config stack-scratch-config
+            #:min-scratch-regs (min-scratch-regs)
             #:post-correct-time (post-correct-time)
-            #:post-correct-remaining-frac (post-correct-remaining-frac)))
+            #:post-correct-remaining-frac (post-correct-remaining-frac)
+            #:performance-cost-syn (performance-cost-syn)
+            #:performance-cost-opt (performance-cost-opt)))
 
 (make-directory* (dir))
 (with-output-to-file #:exists 'truncate (build-path (dir) "best.s")
